@@ -16,6 +16,7 @@ class User(Base):
     earned = Column(Float, default=0)
     ref_purchases = Column(Integer, default=0)
     history = Column(Text, default='[]')  # JSON-строка
+    invited_by = Column(Integer, nullable=True)  # user_id пригласившего
 
 class AsyncDatabase:
     def __init__(self, dsn):
@@ -27,15 +28,19 @@ class AsyncDatabase:
             await conn.run_sync(Base.metadata.create_all)
 
     async def get_user(self, user_id: int):
+        print(f"[DEBUG] Ищу пользователя с user_id={user_id}")
         async with self.async_session() as session:
             result = await session.execute(select(User).where(User.user_id == user_id))
             user = result.scalar_one_or_none()
             if user:
+                print(f"[DEBUG] Пользователь найден: {user_id}")
                 return user
             # Если пользователя нет — создаём
+            print(f"[DEBUG] Пользователь не найден, создаю: {user_id}")
             user = User(user_id=user_id)
             session.add(user)
             await session.commit()
+            print(f"[DEBUG] Пользователь создан и добавлен в БД: {user_id}")
             return user
 
     async def update_user(self, user: User):

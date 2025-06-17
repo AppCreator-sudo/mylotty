@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
@@ -15,50 +15,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 db = AsyncDatabase(os.getenv("DATABASE_URL"))
-
-# Временное хранилище (в реальном проекте используйте базу данных)
-users_db: Dict[int, Dict] = {}
-class Database:
-    @staticmethod
-    def get_user(user_id: int):
-        if user_id not in users_db:
-            users_db[user_id] = {
-                "balance": 0.0,
-                "referrals": [],
-                "earned": 0.0,
-                "pending_payments": {},
-                "ref_purchases": 0,
-                "history": []  # История операций
-            }
-        return users_db[user_id]
-    
-    @staticmethod
-    def update_balance(user_id: int, amount: float):
-        user = Database.get_user(user_id)
-        user["balance"] += amount
-        return user["balance"]
-
-    @staticmethod
-    async def process_withdrawal(user_id: int, amount: float, cryptopay) -> bool:
-        user = Database.get_user(user_id)
-        if user["balance"] < amount:
-            return False
-
-        transfer_amount = amount - 0.1  # комиссия
-        if transfer_amount <= 0:
-            return False
-
-        # Переводим на user_id пользователя (в CryptoBot)
-        result = await cryptopay.transfer(
-            user_id=user_id,
-            amount=transfer_amount,
-            comment="Вывод средств из лотерейного бота"
-        )
-
-        if result.get("ok"):
-            user["balance"] -= amount
-            return True
-        return False
 
 # Настройка логгирования
 logging.basicConfig(level=logging.INFO)
@@ -80,7 +36,7 @@ ADMIN_ID = int(os.getenv('ADMIN_ID'))  # Замените на свой Telegram
 def main_menu(user_id=None):
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text="🎰 Играть", callback_data="play"),
+        InlineKeyboardButton(text="🦋 Играть", callback_data="play"),
         InlineKeyboardButton(text="💰 Баланс", callback_data="balance")
     )
     builder.row(
@@ -101,10 +57,25 @@ def main_menu(user_id=None):
 
 # Обработчики команд
 @dp.message(CommandStart())
-async def start_command(message: types.Message):
+async def start_command(message: types.Message, command: CommandObject):
     user = await db.get_user(message.from_user.id)
+    ref_id = None
+    # Проверяем, есть ли аргумент ref_
+    if command.args and command.args.startswith("ref_"):
+        ref_id = int(command.args.split("_")[1])
+        if ref_id != message.from_user.id:
+            # Сохраняем пригласившего
+            if not getattr(user, "invited_by", None):
+                user.invited_by = ref_id
+                await db.update_user(user)
+            ref_user = await db.get_user(ref_id)
+            referrals = db.get_referrals(ref_user)
+            if message.from_user.id not in referrals:
+                referrals.append(message.from_user.id)
+                db.set_referrals(ref_user, referrals)
+                await db.update_user(ref_user)
     await message.answer(
-        f"🎉 Добро пожаловать!\nВаш баланс: {user.balance:.2f} TON",
+        f"🎉 \U0001F98B Добро пожаловать!\nВаш баланс: {user.balance:.2f} TON",
         reply_markup=main_menu(message.from_user.id)
     )
 
@@ -113,7 +84,7 @@ async def start_command(message: types.Message):
 async def play_handler(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     builder.add(InlineKeyboardButton(text="✅ Я согласен(на)", callback_data="agree_lottery"))
-    builder.add(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main"))
+    builder.add(InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main"))
     await callback.message.edit_text(
         "🎰 Перед началом игры вы должны согласиться с тем, что выигрыши определяются случайным образом и не гарантированы.\n\n"
         "Нажимая 'Продолжить', вы подтверждаете согласие с этими условиями.",
@@ -127,7 +98,7 @@ async def agree_lottery_handler(callback: types.CallbackQuery):
     builder.row(InlineKeyboardButton(text="1 билет — 1 TON", callback_data="buy_1"))
     builder.row(InlineKeyboardButton(text="3 билета — 2.9 TON", callback_data="buy_3"))
     builder.row(InlineKeyboardButton(text="10 билетов — 9 TON", callback_data="buy_10"))
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_play"))
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="back_to_play"))
     await callback.message.edit_text(
         "🎟️ Выберите количество билетов:",
         reply_markup=builder.as_markup()
@@ -138,7 +109,7 @@ async def back_to_play_handler(callback: types.CallbackQuery):
     # Возврат к согласию с правилами
     builder = InlineKeyboardBuilder()
     builder.add(InlineKeyboardButton(text="✅ Я согласен(на)", callback_data="agree_lottery"))
-    builder.add(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main"))
+    builder.add(InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main"))
     await callback.message.edit_text(
         "🎰 Перед началом игры вы должны согласиться с тем, что выигрыши определяются случайным образом и не гарантированы.\n\n"
         "Нажимая 'Продолжить', вы подтверждаете согласие с этими условиями.",
@@ -203,16 +174,20 @@ async def buy_tickets_handler(callback: types.CallbackQuery):
         "amount": -price,
         "desc": f"Покупка {tickets} билет(ов) на {price} TON"
     })
-    # Реферальный бонус
-    if "ref" in callback.message.text:
-        ref_id = int(callback.message.text.split("ref_")[-1].split()[0])
-        if ref_id != user_id:
-            ref_user = await db.get_user(ref_id)
-            bonus = round(price * 0.15, 2)
-            ref_user.balance += bonus
-            ref_user.earned = ref_user.get("earned", 0.0) + bonus
-            if user_id not in ref_user["referrals"]:
-                ref_user["referrals"].append(user_id)
+    # Реферальный бонус (15% от покупки)
+    if getattr(user, "invited_by", None):
+        ref_user = await db.get_user(user.invited_by)
+        bonus = round(price * 0.15, 2)
+        ref_user.balance += bonus
+        ref_user.earned = getattr(ref_user, "earned", 0.0) + bonus
+        ref_history = db.get_history(ref_user)
+        ref_history.append({
+            "type": "referral_bonus",
+            "amount": bonus,
+            "desc": f"Бонус за покупку билета рефералом {user.user_id}"
+        })
+        db.set_history(ref_user, ref_history)
+        await db.update_user(ref_user)
     # Выигрыш: случайно от 10% до 50% от суммы покупки
     win_percent = random.uniform(0.1, 0.5)
     win_amount = round(price * win_percent, 2)
@@ -270,7 +245,7 @@ async def balance_handler(callback: types.CallbackQuery):
         f"Доступно для вывода: {user.balance:.2f} TON"
         f"{history_text}",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")
+            InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main")
         ]])
     )
 
@@ -281,7 +256,9 @@ async def deposit_handler(callback: types.CallbackQuery):
     builder.add(InlineKeyboardButton(text="💳 1 TON", callback_data="deposit_1"))
     builder.add(InlineKeyboardButton(text="💳 5 TON", callback_data="deposit_5"))
     builder.add(InlineKeyboardButton(text="💳 10 TON", callback_data="deposit_10"))
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main"))
+    # Кнопка тестового пополнения
+    builder.add(InlineKeyboardButton(text="🧪 Тестовое пополнение", callback_data="test_deposit"))
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main"))
     await callback.message.edit_text(
         "💳 Пополнение баланса\n\n"
         "Выберите сумму:",
@@ -304,7 +281,7 @@ async def deposit_amount_handler(callback: types.CallbackQuery):
         builder = InlineKeyboardBuilder()
         builder.add(InlineKeyboardButton(text="💳 Оплатить", url=pay_url))
         builder.add(InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice['result']['invoice_id']}"))
-        builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_deposit"))
+        builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="back_to_deposit"))
 
         await callback.message.edit_text(
             f"🔗 Ссылка для оплаты {amount} TON:\n\n"
@@ -320,12 +297,20 @@ async def back_to_deposit_handler(callback: types.CallbackQuery):
     builder.add(InlineKeyboardButton(text="💳 1 TON", callback_data="deposit_1"))
     builder.add(InlineKeyboardButton(text="💳 5 TON", callback_data="deposit_5"))
     builder.add(InlineKeyboardButton(text="💳 10 TON", callback_data="deposit_10"))
-    builder.row(InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main"))
-    await callback.message.edit_text(
-        "💳 Пополнение баланса\n\n"
-        "Выберите сумму:",
-        reply_markup=builder.as_markup()
-    )
+    builder.row(InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main"))
+    # Если сообщение содержит ошибку — отправляем новое сообщение, а не редактируем
+    if callback.message.text and "❌ Оплата не найдена или произошла ошибка." in callback.message.text:
+        await callback.message.answer(
+            "💳 Пополнение баланса\n\n"
+            "Выберите сумму:",
+            reply_markup=builder.as_markup()
+        )
+    else:
+        await callback.message.edit_text(
+            "💳 Пополнение баланса\n\n"
+            "Выберите сумму:",
+            reply_markup=builder.as_markup()
+        )
 
 @dp.callback_query(F.data.startswith("check_"))
 async def check_payment_handler(callback: types.CallbackQuery):
@@ -333,7 +318,7 @@ async def check_payment_handler(callback: types.CallbackQuery):
     invoice = await cryptopay.check_invoice(invoice_id)
     menu_markup = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice_id}")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_deposit")]
+        [InlineKeyboardButton(text="‹ Назад", callback_data="back_to_deposit")]
     ])
 
     if invoice.get("ok") and invoice.get("result"):
@@ -372,7 +357,7 @@ async def check_payment_handler(callback: types.CallbackQuery):
             "❌ Оплата не найдена или произошла ошибка.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice_id}")],
-                [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_deposit")]
+                [InlineKeyboardButton(text="‹ Назад", callback_data="back_to_deposit")]
             ])
         )
 
@@ -393,7 +378,7 @@ async def withdraw_handler(callback: types.CallbackQuery):
         "Введите сумму для вывода (например: <code>1.5</code>):\n\n"
         "<b>Перед первым выводом обязательно запустите @CryptoBot, чтобы создать кошелёк!</b>",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")
+            InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main")
         ]])
     )
 
@@ -431,7 +416,7 @@ async def promo_handler(callback: types.CallbackQuery):
         "🎁 Акции и бонусы\n\n"
         "Скоро здесь появятся специальные предложения!",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")
+            InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main")
         ]])
     )
 
@@ -445,7 +430,7 @@ async def rules_handler(callback: types.CallbackQuery):
         "3. Запрещено использование ботов\n\n"
         "По вопросам: @support",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")
+            InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main")
         ]])
     )
 
@@ -483,7 +468,7 @@ async def referral_handler(callback: types.CallbackQuery):
     await callback.message.edit_text(
         text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_main")
+            InlineKeyboardButton(text="‹ Назад", callback_data="back_to_main")
         ]])
     )
 
@@ -507,6 +492,26 @@ async def lottery_back_to_main_handler(callback: types.CallbackQuery):
     await callback.message.answer(
         "🎉 Добро пожаловать в лотерейный бот!\nЗдесь вы можете испытать удачу и выиграть призы!",
         reply_markup=main_menu(callback.from_user.id)
+    )
+
+# Обработчик тестового пополнения
+@dp.callback_query(F.data == "test_deposit")
+async def test_deposit_handler(callback: types.CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    user.balance += 1  # Тестовое пополнение на 1 TON
+    history = db.get_history(user)
+    history.append({
+        "type": "test_deposit",
+        "amount": 1,
+        "desc": "Тестовое пополнение (без реальных денег)"
+    })
+    db.set_history(user, history)
+    await db.update_user(user)
+    await callback.message.edit_text(
+        "🧪 Тестовое пополнение успешно! На ваш баланс начислен 1 TON.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🏠 В меню", callback_data="back_to_main")
+        ]])
     )
 
 # Запуск бота
