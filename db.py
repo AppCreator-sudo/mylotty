@@ -17,6 +17,7 @@ class User(Base):
     ref_purchases = Column(Integer, default=0)
     history = Column(Text, default='[]')  # JSON-строка
     invited_by = Column(Integer, nullable=True)  # user_id пригласившего
+    lang = Column(String, default='ru')  # язык пользователя (ru/en)
 
 class AsyncDatabase:
     def __init__(self, dsn):
@@ -83,4 +84,4 @@ class AsyncDatabase:
             return True
         return False
 
-# Пример DSN: 'postgresql+asyncpg://user:password@localhost:5432/dbname' 
+# Пример DSN: 'postgresql+asyncpg://user:password@localhost:5432/localhost' 
