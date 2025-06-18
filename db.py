@@ -1,9 +1,9 @@
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, Integer, Float, String, Text
+from sqlalchemy import Column, Integer, Float, String, Text, update
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy import select, update
+from sqlalchemy import select
 import json
 
 Base = declarative_base()
@@ -83,5 +83,12 @@ class AsyncDatabase:
             await self.update_user(user)
             return True
         return False
+
+    async def update_user_language(self, user_id: int, lang: str):
+        async with self.async_session() as session:
+            await session.execute(
+                update(User).where(User.user_id == user_id).values(lang=lang)
+            )
+            await session.commit()
 
 # Пример DSN: 'postgresql+asyncpg://user:password@localhost:5432/localhost' 

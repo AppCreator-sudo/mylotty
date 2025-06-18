@@ -9,9 +9,11 @@ from uuid import uuid4
 from typing import Dict, Optional
 from cryptopay import CryptoPay
 import random
-from db import AsyncDatabase
+from db import AsyncDatabase, User
 import os
 from dotenv import load_dotenv
+import datetime
+from aiogram.exceptions import TelegramBadRequest
 
 load_dotenv()
 db = AsyncDatabase(os.getenv("DATABASE_URL"))
@@ -35,8 +37,8 @@ ADMIN_ID = int(os.getenv('ADMIN_ID'))  # Замените на свой Telegram
 # Словарь переводов
 translations = {
     "start": {
-        "ru": "🎉 Добро пожаловать!\nВаш баланс: {balance:.2f} TON",
-        "en": "🎉 Welcome!\nYour balance: {balance:.2f} TON"
+        "ru": "🎉 Добро пожаловать, {username}!\nВаш баланс: {balance:.2f} TON\n\nLOTTY TON — это современная лотерея с честными розыгрышами и реальными шансами на крупный выигрыш!\n\n• Главный джекпот — до 25 000 TON\n• Мгновенные выплаты через <a href=\"https://t.me/CryptoBot\">CryptoBot</a> — официальный платёжный сервис Telegram\n• Кэшбэк, бонусы и реферальная программа\n\nПопробуйте удачу — возможно, именно вы станете следующим победителем!",
+        "en": "🎉 Welcome, {username}!\nYour balance: {balance:.2f} TON\n\nLOTTY TON is a modern lottery with fair draws and real chances to win big!\n\n• Main jackpot — up to 25,000 TON\n• Instant payouts via <a href=\"https://t.me/CryptoBot\">CryptoBot</a> — the official payment service of Telegram\n• Cashback, bonuses, and referral program\n\nTry your luck — maybe you'll be the next winner!"
     },
     "choose_language": {
         "ru": "Выберите язык:",
@@ -51,16 +53,16 @@ translations = {
         "en": "English"
     },
     "play": {
-        "ru": "🦋 Играть",
-        "en": "🦋 Play"
+        "ru": "🎫 LOTTY TON",
+        "en": "🎫 LOTTY TON"
     },
     "balance": {
         "ru": "💰 Баланс",
         "en": "💰 Balance"
     },
     "deposit": {
-        "ru": "💳 Пополнить",
-        "en": "💳 Deposit"
+        "ru": "📥 Пополнить",
+        "en": "📥 Deposit"
     },
     "withdraw": {
         "ru": "📤 Вывод",
@@ -87,16 +89,16 @@ translations = {
         "en": "🏠 Main menu"
     },
     "change_lang": {
-        "ru": "🌐 Язык",
-        "en": "🌐 Language"
+        "ru": "🌐 Сменить язык",
+        "en": "🌐 Change language"
     },
     "add10": {
         "ru": "💸 Начислить 10 TON",
         "en": "💸 Add 10 TON"
     },
     "agree_lottery": {
-        "ru": "🎰 Перед началом игры вы должны согласиться с тем, что выигрыши определяются случайным образом и не гарантированы.\n\nНажимая 'Продолжить', вы подтверждаете согласие с этими условиями.",
-        "en": "🎰 Before you start playing, you must agree that winnings are determined randomly and are not guaranteed.\n\nBy clicking 'Continue', you confirm your agreement with these terms."
+        "ru": "Перед началом игры, пожалуйста, подтвердите своё согласие с правилами лотереи.\n\nLOTYY TON — это честная и прозрачная лотерея, где каждый билет даёт шанс выиграть призы, включая главный джекпот до 25 000 TON!\n\nПокупая билет, вы принимаете участие в розыгрыше, где всё решает удача. Чем больше билетов — тем выше ваши шансы!\n\nЖелаем удачи! Пусть именно вы станете обладателем джекпота!",
+        "en": "Before you start playing, please confirm your agreement with the lottery rules.\n\nLOTYY TON is a fair and transparent lottery where every ticket gives you a chance to win prizes, including the main jackpot of up to 25,000 TON!\n\nBy purchasing a ticket, you enter the draw where everything depends on luck. The more tickets you buy, the higher your chances!\n\nGood luck! Maybe you will be the next jackpot winner!"
     },
     "agree_button": {
         "ru": "✅ Я согласен(на)",
@@ -143,8 +145,8 @@ translations = {
         "en": "No transactions."
     },
     "deposit_menu": {
-        "ru": "💳 Пополнение баланса\n\nВыберите сумму:",
-        "en": "💳 Deposit balance\n\nChoose the amount:"
+        "ru": "📥 Пополнение баланса\n\nВыберите сумму:",
+        "en": "📥 Deposit balance\n\nChoose the amount:"
     },
     "deposit_pay": {
         "ru": "🔗 Ссылка для оплаты {amount} TON:\n\nСчет действителен 1 час.",
@@ -171,8 +173,8 @@ translations = {
         "en": "❌ Payment not found or an error occurred."
     },
     "withdraw_menu": {
-        "ru": "📤 Вывод средств\n\nДоступно: {balance:.2f} TON\nВведите сумму для вывода (например: <code>1.5</code>):\n\n<b>Перед первым выводом обязательно запустите @CryptoBot, чтобы создать кошелёк!</b>",
-        "en": "📤 Withdraw funds\n\nAvailable: {balance:.2f} TON\nEnter the amount to withdraw (e.g.: <code>1.5</code>):\n\n<b>Before your first withdrawal, be sure to start @CryptoBot to create a wallet!</b>"
+        "ru": "📤 Вывод средств\n\nДоступно: {balance:.2f} TON\nВведите сумму для вывода (например: <code>1.5</code>):\n\n<b>Перед первым выводом убедитесь, что у вас есть действующий кошелёк в @CryptoBot!</b>",
+        "en": "📤 Withdraw funds\n\nAvailable: {balance:.2f} TON\nEnter the amount to withdraw (e.g.: <code>1.5</code>):\n\n<b>Before your first withdrawal, make sure you have an active wallet in @CryptoBot!</b>"
     },
     "withdraw_min": {
         "ru": "❌ Минимальная сумма для вывода: 1 TON",
@@ -191,9 +193,19 @@ translations = {
         "en": "❌ Not enough funds."
     },
     "promo_text": {
-        "ru": "🎁 Акции и бонусы\n\nСкоро здесь появятся специальные предложения!",
-        "en": "🎁 Promotions and bonuses\n\nSpecial offers will appear here soon!"
+        "ru": "<b>🎁 Акции и бонусы LOTTY TON</b>\n\n<b>1. Реферальная программа</b>\n— Приглашайте друзей по вашей реферальной ссылке (раздел 👥 Рефералы).\n— Получайте 15% от всех покупок билетов вашими рефералами.\n\n<b>2. Кэшбэк в выходные</b>\n— Каждую субботу и воскресенье вы получаете 3% кэшбэка на баланс с каждой покупки билетов.\n\n<b>3. Скидки на массовые покупки билетов</b>\n— 3 билета = 2.9 TON (экономия 0.1 TON)\n— 10 билетов = 9 TON (экономия 1 TON)\n\nСледите за новыми акциями и бонусами — они будут появляться здесь!",
+        "en": "<b>🎁 LOTTY TON Promotions and Bonuses</b>\n\n<b>1. Referral Program</b>\n— Invite friends using your referral link (see 👥 Referrals).\n— Get 15% of all ticket purchases made by your referrals.\n\n<b>2. Weekend Cashback</b>\n— Every Saturday and Sunday you receive 3% cashback on every ticket purchase.\n\n<b>3. Discounts for bulk ticket purchases</b>\n— 3 tickets = 2.9 TON (save 0.1 TON)\n— 10 tickets = 9 TON (save 1 TON)\n\nStay tuned for new promotions and bonuses — they will appear here!"
     },
+    "rules_page1": {
+        "ru": "<b>📜 Правила игры LOTTY TON</b>\n\n<b>1. Общие положения</b>\n- LOTTY TON — это лотерейный бот, где вы можете покупать билеты, участвовать в розыгрышах и получать призы.\n\n<b>2. Баланс и пополнение</b>\n- Ваш баланс отображается в TON (Toncoin).\n- Пополнить баланс можно через <a href='https://t.me/CryptoBot'>CryptoBot</a> (📥 Пополнить).\n- CryptoBot — это надёжный платёжный сервис, рекомендованный Telegram для работы с криптовалютой.\n- Минимальная сумма пополнения — 1 TON.\n\n<b>3. Покупка билетов и розыгрыш</b>\n- Для участия в лотерее купите билеты (🎫 LOTTY TON).\n- Доступны пакеты: 1 билет (1 TON), 3 билета (2.9 TON), 10 билетов (9 TON).\n- После покупки билетов происходит розыгрыш: вы можете выиграть от 0.01 TON до 25 000 TON.\n- Результат розыгрыша и история операций отображаются в разделе «Баланс».",
+        "en": "<b>📜 LOTTY TON Game Rules</b>\n\n<b>1. General</b>\n- LOTTY TON is a lottery bot where you can buy tickets, participate in draws, and win prizes.\n\n<b>2. Balance and Deposit</b>\n- Your balance is shown in TON (Toncoin).\n- You can top up your balance via <a href='https://t.me/CryptoBot'>CryptoBot</a> (📥 Deposit).\n- CryptoBot is a reliable payment service recommended by Telegram for working with cryptocurrency.\n- Minimum deposit amount is 1 TON.\n\n<b>3. Ticket Purchase and Draw</b>\n- To participate, buy tickets (🎫 LOTTY TON).\n- Available packages: 1 ticket (1 TON), 3 tickets (2.9 TON), 10 tickets (9 TON).\n- After purchasing tickets, a draw takes place: you can win from 0.01 TON to 25,000 TON.\n- Draw results and transaction history are shown in the Balance section."
+    },
+    "rules_page2": {
+        "ru": "<b>4. Вывод средств</b>\n- Вывести средства можно через CryptoBot (📤 Вывод).\n- Минимальная сумма для вывода — 1 TON.\n- Перед первым выводом убедитесь, что у вас есть действующий кошелёк в @CryptoBot.\n- На вывод средств может взиматься комиссия 0.1 TON.\n\n<b>5. Реферальная программа</b>\n- Приглашайте друзей по вашей реферальной ссылке (👥 Рефералы).\n- Вы получаете 15% от всех покупок билетов вашими рефералами.\n- В разделе «Рефералы» отображается ваша ссылка, статистика и заработанные бонусы.\n\n<b>6. Мультиязычность</b>\n- Бот поддерживает русский и английский языки. Сменить язык можно в главном меню («🌐 Сменить язык»).\n\n<b>7. История операций</b>\n- Вся ваша активность (пополнения, выводы, покупки билетов, выигрыши, бонусы) отображается в истории операций.\n\n<b>8. Безопасность и честность</b>\n- Использование ботов и автоматизированных скриптов запрещено.\n- Администрация оставляет за собой право заблокировать пользователя за нарушение правил.\n\n<b>9. Поддержка</b>\n- По всем вопросам обращайтесь: @support",
+        "en": "<b>4. Withdrawals</b>\n- You can withdraw funds via CryptoBot (📤 Withdraw).\n- Minimum withdrawal amount is 1 TON.\n- Before your first withdrawal, make sure you have an active wallet in @CryptoBot.\n- A 0.1 TON fee may be charged for withdrawals.\n\n<b>5. Referral Program</b>\n- Invite friends using your referral link (👥 Referrals).\n- You receive 15% of all ticket purchases made by your referrals.\n- Your link, stats, and earned bonuses are shown in the Referrals section.\n\n<b>6. Multilanguage</b>\n- The bot supports Russian and English. You can change the language in the main menu ('🌐 Change language').\n\n<b>7. Transaction History</b>\n- All your activity (deposits, withdrawals, ticket purchases, winnings, bonuses) is shown in your transaction history.\n\n<b>8. Security and Fairness</b>\n- The use of bots and automated scripts is prohibited.\n- The administration reserves the right to block users for violating the rules.\n\n<b>9. Support</b>\n- For any questions, contact: @support"
+    },
+    "next": {"ru": "› Далее", "en": "› Next"},
+    "prev": {"ru": "‹ Назад", "en": "‹ Back"},
     "rules_text": {
         "ru": "📜 Правила и поддержка\n\n1. Минимальная ставка: 1 TON\n2. Вывод средств в течение 24 часов\n3. Запрещено использование ботов\n\nПо вопросам: @support",
         "en": "📜 Rules and support\n\n1. Minimum bet: 1 TON\n2. Withdrawals within 24 hours\n3. Use of bots is prohibited\n\nFor questions: @support"
@@ -246,7 +258,74 @@ translations = {
         "ru": "Тестовое пополнение (без реальных денег)",
         "en": "Test deposit (no real money)"
     },
-    # ... остальные переводы будут добавлены по ходу ...
+    "history_cashback": {
+        "ru": "Кэшбек 3% за покупку билетов (выходные)",
+        "en": "3% cashback for ticket purchase (weekend)"
+    },
+    "settings": {
+        "ru": "⚙️ Настройки",
+        "en": "⚙️ Settings"
+    },
+    "notifications": {
+        "ru": "🔔 Уведомления: {status}",
+        "en": "🔔 Notifications: {status}"
+    },
+    "notifications_on": {
+        "ru": "Вкл.",
+        "en": "On"
+    },
+    "notifications_off": {
+        "ru": "Выкл.",
+        "en": "Off"
+    },
+    "clear_history": {
+        "ru": "🗑 Очистить историю",
+        "en": "🗑 Clear history"
+    },
+    "profile": {
+        "ru": "👤 Профиль",
+        "en": "👤 Profile"
+    },
+    "delete_account": {
+        "ru": "❌ Удалить аккаунт",
+        "en": "❌ Delete account"
+    },
+    "history_cleared": {
+        "ru": "История операций очищена!",
+        "en": "Transaction history cleared!"
+    },
+    "profile_info": {
+        "ru": "<b>Профиль</b>\nID: {user_id}\nЯзык: {lang_display}\nБаланс: {balance:.2f} TON\nДата регистрации: {created}",
+        "en": "<b>Profile</b>\nID: {user_id}\nLanguage: {lang_display}\nBalance: {balance:.2f} TON\nRegistered: {created}"
+    },
+    "delete_confirm": {
+        "ru": "Вы уверены, что хотите удалить аккаунт? Это действие необратимо!",
+        "en": "Are you sure you want to delete your account? This action is irreversible!"
+    },
+    "delete_yes": {
+        "ru": "Да, удалить",
+        "en": "Yes, delete"
+    },
+    "delete_no": {
+        "ru": "Нет, отмена",
+        "en": "No, cancel"
+    },
+    "account_deleted": {
+        "ru": "Ваш аккаунт удалён.",
+        "en": "Your account has been deleted."
+    },
+    "language_changed": {
+        "ru": "Язык успешно изменён!",
+        "en": "Language changed successfully!"
+    },
+    "error_refresh": {
+        "ru": "Не удалось обновить сообщение. Пожалуйста, откройте меню заново.",
+        "en": "Failed to refresh message. Please reopen the menu."
+    },
+    "second_chance_winner": {
+        "ru": "🎉 В еженедельном розыгрыше «Второй шанс» победил пользователь с id {winner_id}!\nОн получает 10 TON. Поздравляем!\nУчаствуйте в лотерее на этой неделе — и, возможно, удача улыбнётся вам!",
+        "en": "🎉 In the weekly 'Second Chance' draw, the winner is user with id {winner_id}!\nThey receive 10 TON. Congratulations!\nTake part in the lottery this week — maybe you'll be the next lucky one!"
+    },
 }
 
 def t(key, lang, **kwargs):
@@ -255,25 +334,29 @@ def t(key, lang, **kwargs):
 # Главное меню
 def main_menu(user_id=None, lang='ru'):
     builder = InlineKeyboardBuilder()
+    # Кнопка LOTTY TON сверху
     builder.row(
-        InlineKeyboardButton(text=t("play", lang), callback_data="play"),
-        InlineKeyboardButton(text=t("balance", lang), callback_data="balance")
+        InlineKeyboardButton(text=t("play", lang), callback_data="play")
+    )
+    # Остальные кнопки в два столбца
+    builder.row(
+        InlineKeyboardButton(text=t("balance", lang), callback_data="balance"),
+        InlineKeyboardButton(text=t("deposit", lang), callback_data="deposit")
     )
     builder.row(
-        InlineKeyboardButton(text=t("deposit", lang), callback_data="deposit"),
-        InlineKeyboardButton(text=t("withdraw", lang), callback_data="withdraw")
+        InlineKeyboardButton(text=t("withdraw", lang), callback_data="withdraw"),
+        InlineKeyboardButton(text=t("promo_btn", lang), callback_data="promo")
     )
     builder.row(
-        InlineKeyboardButton(text=t("promo_btn", lang), callback_data="promo"),
-        InlineKeyboardButton(text=t("rules_btn", lang), callback_data="rules")
-    )
-    builder.row(
+        InlineKeyboardButton(text=t("rules_btn", lang), callback_data="rules"),
         InlineKeyboardButton(text=t("referral", lang), callback_data="referral")
     )
+    # Кнопка смены языка отдельной строкой
     builder.row(
         InlineKeyboardButton(text=t("change_lang", lang), callback_data="change_lang")
     )
     if user_id == ADMIN_ID:
+        builder.row(InlineKeyboardButton(text="🧪 Тестовая рассылка Второй шанс", callback_data="second_chance_test"))
         builder.row(InlineKeyboardButton(text=t("add10", lang), callback_data="add10"))
     return builder.as_markup()
 
@@ -281,6 +364,7 @@ def main_menu(user_id=None, lang='ru'):
 @dp.message(CommandStart())
 async def start_command(message: types.Message, command: CommandObject):
     user = await db.get_user(message.from_user.id)
+    username = message.from_user.username or message.from_user.first_name or "Пользователь"
     if not getattr(user, "lang", None):
         # Показываем выбор языка
         builder = InlineKeyboardBuilder()
@@ -293,10 +377,10 @@ async def start_command(message: types.Message, command: CommandObject):
             reply_markup=builder.as_markup()
         )
         return
-    # Дальше обычная логика, но все тексты через t(..., user.lang)
     await message.answer(
-        t("start", user.lang, balance=user.balance),
-        reply_markup=main_menu(message.from_user.id, lang=user.lang)
+        t("start", user.lang, balance=user.balance, username=username),
+        reply_markup=main_menu(message.from_user.id, lang=user.lang),
+        disable_web_page_preview=True
     )
 
 # Раздел игры — согласие с правилами
@@ -391,10 +475,16 @@ async def buy_tickets_handler(callback: types.CallbackQuery):
     # История операций
     history = db.get_history(user)
     history.append({"type": "game", "tickets": tickets, "amount": -price})
+    # Кэшбек за выходные
+    now = datetime.datetime.now()
+    if now.weekday() in [5, 6]:  # 5 - суббота, 6 - воскресенье
+        cashback = round(price * 0.03, 2)
+        user.balance += cashback
+        history.append({"type": "cashback", "amount": cashback})
     # Реферальный бонус (15% от покупки)
     if getattr(user, "invited_by", None):
         ref_user = await db.get_user(user.invited_by)
-        bonus = round(price * 0.15, 2)
+        bonus = round(price * getattr(ref_user, "ref_percent", 0.15), 2)
         ref_user.balance += bonus
         ref_user.earned = getattr(ref_user, "earned", 0.0) + bonus
         ref_history = db.get_history(ref_user)
@@ -455,6 +545,9 @@ async def balance_handler(callback: types.CallbackQuery):
                     amount = h.get("amount", "")
                 elif h.get("type") == "test_deposit":
                     desc = t("history_test_deposit", user.lang)
+                    amount = h.get("amount", "")
+                elif h.get("type") == "cashback":
+                    desc = t("history_cashback", user.lang)
                     amount = h.get("amount", "")
                 else:
                     desc = str(h)
@@ -634,11 +727,39 @@ async def promo_handler(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "rules")
 async def rules_handler(callback: types.CallbackQuery):
     user = await db.get_user(callback.from_user.id)
+    lang = user.lang
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text=t("next", lang), callback_data="rules_next"))
+    builder.row(InlineKeyboardButton(text=t("back", lang), callback_data="back_to_main"))
     await callback.message.edit_text(
-        t("rules_text", user.lang),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[ 
-            InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
-        ]])
+        t("rules_page1", lang),
+        reply_markup=builder.as_markup(),
+        disable_web_page_preview=True
+    )
+
+@dp.callback_query(F.data == "rules_next")
+async def rules_next_handler(callback: types.CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user.lang
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text=t("prev", lang), callback_data="rules_prev"))
+    await callback.message.edit_text(
+        t("rules_page2", lang),
+        reply_markup=builder.as_markup(),
+        disable_web_page_preview=True
+    )
+
+@dp.callback_query(F.data == "rules_prev")
+async def rules_prev_handler(callback: types.CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    lang = user.lang
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text=t("next", lang), callback_data="rules_next"))
+    builder.row(InlineKeyboardButton(text=t("back", lang), callback_data="back_to_main"))
+    await callback.message.edit_text(
+        t("rules_page1", lang),
+        reply_markup=builder.as_markup(),
+        disable_web_page_preview=True
     )
 
 # Реферальная программа
@@ -715,30 +836,65 @@ async def test_deposit_handler(callback: types.CallbackQuery):
     )
 
 # Обработчик выбора языка
-@dp.callback_query(F.data.in_(["lang_ru", "lang_en"]))
-async def set_language(callback: types.CallbackQuery):
-    user = await db.get_user(callback.from_user.id)
-    lang = "ru" if callback.data == "lang_ru" else "en"
-    user.lang = lang
-    await db.update_user(user)
-    await callback.message.edit_text(
-        t("start", lang, balance=user.balance),
-        reply_markup=main_menu(callback.from_user.id, lang=lang)
-    )
-
-# Обработчик смены языка
 @dp.callback_query(F.data == "change_lang")
 async def change_lang_handler(callback: types.CallbackQuery):
     user = await db.get_user(callback.from_user.id)
     builder = InlineKeyboardBuilder()
     builder.row(
-        InlineKeyboardButton(text=t("button_ru", user.lang), callback_data="lang_ru"),
-        InlineKeyboardButton(text=t("button_en", user.lang), callback_data="lang_en")
+        InlineKeyboardButton(text="Русский", callback_data="lang_ru"),
+        InlineKeyboardButton(text="English", callback_data="lang_en")
     )
-    await callback.message.edit_text(
-        t("choose_language", user.lang),
-        reply_markup=builder.as_markup()
-    )
+    try:
+        await callback.message.edit_text(
+            t("choose_language", user.lang),
+            reply_markup=builder.as_markup()
+        )
+    except TelegramBadRequest:
+        await callback.answer(t("error_refresh", user.lang))
+    await callback.answer()
+
+@dp.callback_query(F.data.in_(["lang_ru", "lang_en"]))
+async def set_language(callback: types.CallbackQuery):
+    lang = "ru" if callback.data == "lang_ru" else "en"
+    await db.update_user_language(callback.from_user.id, lang)
+    user = await db.get_user(callback.from_user.id)
+    username = callback.from_user.username or callback.from_user.first_name or "Пользователь"
+    try:
+        await callback.message.edit_text(
+            t("start", lang, balance=user.balance, username=username),
+            reply_markup=main_menu(callback.from_user.id, lang=lang),
+            disable_web_page_preview=True
+        )
+    except TelegramBadRequest:
+        await callback.answer(t("language_changed", lang), show_alert=True)
+    await callback.answer()
+
+# Обработчик тестовой рассылки для администратора
+@dp.callback_query(F.data == "second_chance_test")
+async def second_chance_test_handler(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    import random
+    fake_id = str(random.randint(100000000, 999999999))
+    winner_id_masked = fake_id[:-3] + "***"
+    # Получаем всех пользователей
+    async with db.async_session() as session:
+        from sqlalchemy import select
+        result = await session.execute(select(User))
+        users = result.scalars().all()
+    count = 0
+    for user in users:
+        lang = getattr(user, "lang", "ru")
+        try:
+            await bot.send_message(
+                user.user_id,
+                t("second_chance_winner", lang, winner_id=winner_id_masked)
+            )
+            count += 1
+        except Exception as e:
+            print(f"[SecondChance] Не удалось отправить пользователю {user.user_id}: {e}")
+    await callback.answer(f"Рассылка завершена. Отправлено: {count}", show_alert=True)
 
 # Запуск бота
 async def main():
