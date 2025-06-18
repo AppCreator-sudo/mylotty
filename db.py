@@ -1,7 +1,7 @@
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, Integer, Float, String, Text, update
+from sqlalchemy import Column, Integer, Float, String, Text, update, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import select
 import json
@@ -10,13 +10,13 @@ Base = declarative_base()
 
 class User(Base):
     __tablename__ = 'users'
-    user_id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, primary_key=True)
     balance = Column(Float, default=0)
     referrals = Column(Text, default='[]')  # JSON-строка
     earned = Column(Float, default=0)
     ref_purchases = Column(Integer, default=0)
     history = Column(Text, default='[]')  # JSON-строка
-    invited_by = Column(Integer, nullable=True)  # user_id пригласившего
+    invited_by = Column(BigInteger, nullable=True)  # user_id пригласившего
     lang = Column(String, default='ru')  # язык пользователя (ru/en)
 
 class AsyncDatabase:

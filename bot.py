@@ -97,8 +97,8 @@ translations = {
         "en": "💸 Add 10 TON"
     },
     "agree_lottery": {
-        "ru": "Перед началом игры, пожалуйста, подтвердите своё согласие с правилами лотереи.\n\nLOTYY TON — это честная и прозрачная лотерея, где каждый билет даёт шанс выиграть призы, включая главный джекпот до 25 000 TON!\n\nПокупая билет, вы принимаете участие в розыгрыше, где всё решает удача. Чем больше билетов — тем выше ваши шансы!\n\nЖелаем удачи! Пусть именно вы станете обладателем джекпота!",
-        "en": "Before you start playing, please confirm your agreement with the lottery rules.\n\nLOTYY TON is a fair and transparent lottery where every ticket gives you a chance to win prizes, including the main jackpot of up to 25,000 TON!\n\nBy purchasing a ticket, you enter the draw where everything depends on luck. The more tickets you buy, the higher your chances!\n\nGood luck! Maybe you will be the next jackpot winner!"
+        "ru": "Перед началом игры, пожалуйста, подтвердите своё согласие с правилами лотереи.\n\nLOTTY TON — это честная и прозрачная лотерея, где каждый билет даёт шанс выиграть призы, включая главный джекпот до 25 000 TON!\n\nПокупая билет, вы принимаете участие в розыгрыше, где всё решает удача. Чем больше билетов — тем выше ваши шансы!\n\nЖелаем удачи! Пусть именно вы станете обладателем джекпота!",
+        "en": "Before you start playing, please confirm your agreement with the lottery rules.\n\nLOTTY TON is a fair and transparent lottery where every ticket gives you a chance to win prizes, including the main jackpot of up to 25,000 TON!\n\nBy purchasing a ticket, you enter the draw where everything depends on luck. The more tickets you buy, the higher your chances!\n\nGood luck! Maybe you will be the next jackpot winner!"
     },
     "agree_button": {
         "ru": "✅ Я согласен(на)",
@@ -365,6 +365,24 @@ def main_menu(user_id=None, lang='ru'):
 async def start_command(message: types.Message, command: CommandObject):
     user = await db.get_user(message.from_user.id)
     username = message.from_user.username or message.from_user.first_name or "Пользователь"
+    # Если пользователь только что создан и есть аргумент ref_
+    ref_id = None
+    if command.args and command.args.startswith("ref_"):
+        try:
+            ref_id = int(command.args[4:])
+        except Exception:
+            ref_id = None
+    if ref_id and ref_id != message.from_user.id:
+        # Сохраняем пригласившего
+        user.invited_by = ref_id
+        await db.update_user(user)
+        # Добавляем этого пользователя в список рефералов пригласившего
+        ref_user = await db.get_user(ref_id)
+        referrals = db.get_referrals(ref_user)
+        if message.from_user.id not in referrals:
+            referrals.append(message.from_user.id)
+            db.set_referrals(ref_user, referrals)
+            await db.update_user(ref_user)
     if not getattr(user, "lang", None):
         # Показываем выбор языка
         builder = InlineKeyboardBuilder()
