@@ -2,9 +2,11 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command, CommandObject
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 from uuid import uuid4
 from typing import Dict, Optional
 from cryptopay import CryptoPay
@@ -12,7 +14,7 @@ import random
 from db import AsyncDatabase, User
 import os
 from dotenv import load_dotenv
-import datetime
+from datetime import datetime, timedelta, timezone
 from aiogram.exceptions import TelegramBadRequest
 
 load_dotenv()
@@ -33,6 +35,11 @@ dp = Dispatcher()
 cryptopay = CryptoPay(token=CRYPTOPAY_TOKEN)
 
 ADMIN_ID = int(os.getenv('ADMIN_ID'))  # Замените на свой Telegram user_id
+
+# Состояния для FSM
+class UserStates(StatesGroup):
+    waiting_for_deposit_amount = State()
+    waiting_for_withdraw_amount = State()
 
 # Словарь переводов
 translations = {
@@ -145,8 +152,8 @@ translations = {
         "en": "No transactions."
     },
     "deposit_menu": {
-        "ru": "📥 Пополнение баланса\n\nВыберите сумму:",
-        "en": "📥 Deposit balance\n\nChoose the amount:"
+        "ru": "📥 Пополнение баланса\n\n💰 Валюта: TON (Toncoin)\n💳 Способ пополнения: CryptoBot — официальный платёжный сервис Telegram\n\n📋 Как пополнить баланс:\n• Введите сумму для пополнения (минимум 1 TON)\n• Нажмите кнопку «Оплатить»\n• Перейдите в CryptoBot и подтвердите платёж\n• После оплаты нажмите «Проверить оплату»\n• Дождитесь зачисления средств на баланс\n\n⏱️ Счёт действителен 1 час\n💡 Комиссия CryptoBot: ~3% от суммы\n\nВведите сумму для пополнения:",
+        "en": "📥 Deposit balance\n\n💰 Currency: TON (Toncoin)\n💳 Payment method: CryptoBot — official Telegram payment service\n\n📋 How to deposit:\n• Enter the amount to deposit (minimum 1 TON)\n• Click the «Pay» button\n• Go to CryptoBot and confirm the payment\n• After payment, click «Check payment»\n• Wait for funds to be credited to your balance\n\n⏱️ Invoice is valid for 1 hour\n💡 CryptoBot fee: ~3% of the amount\n\nEnter the amount to deposit:"
     },
     "deposit_pay": {
         "ru": "🔗 Ссылка для оплаты {amount} TON:\n\nСчет действителен 1 час.",
@@ -173,8 +180,8 @@ translations = {
         "en": "❌ Payment not found or an error occurred."
     },
     "withdraw_menu": {
-        "ru": "📤 Вывод средств\n\nДоступно: {balance:.2f} TON\nВведите сумму для вывода (например: <code>1.5</code>):\n\n<b>Перед первым выводом убедитесь, что у вас есть действующий кошелёк в @CryptoBot!</b>",
-        "en": "📤 Withdraw funds\n\nAvailable: {balance:.2f} TON\nEnter the amount to withdraw (e.g.: <code>1.5</code>):\n\n<b>Before your first withdrawal, make sure you have an active wallet in @CryptoBot!</b>"
+        "ru": "📤 Вывод средств\n\n💰 Валюта: TON (Toncoin)\n💳 Способ вывода: CryptoBot — официальный платёжный сервис Telegram\n\n📋 Как вывести средства:\n• Убедитесь, что у вас есть активный кошелёк в @CryptoBot\n• Введите сумму для вывода (минимум 1 TON)\n• Подтвердите вывод средств\n• Дождитесь поступления TON в ваш кошелёк\n\n💡 Комиссия за вывод: 0.1 TON\n⏱️ Время обработки: до 5 минут\n\nДоступно для вывода: {balance:.2f} TON\nВведите сумму для вывода (например: <code>1.5</code>):",
+        "en": "📤 Withdraw funds\n\n💰 Currency: TON (Toncoin)\n💳 Withdrawal method: CryptoBot — official Telegram payment service\n\n📋 How to withdraw:\n• Make sure you have an active wallet in @CryptoBot\n• Enter the amount to withdraw (minimum 1 TON)\n• Confirm the withdrawal\n• Wait for TON to arrive in your wallet\n\n💡 Withdrawal fee: 0.1 TON\n⏱️ Processing time: up to 5 minutes\n\nAvailable for withdrawal: {balance:.2f} TON\nEnter the amount to withdraw (e.g.: <code>1.5</code>):"
     },
     "withdraw_min": {
         "ru": "❌ Минимальная сумма для вывода: 1 TON",
@@ -193,8 +200,40 @@ translations = {
         "en": "❌ Not enough funds."
     },
     "promo_text": {
-        "ru": "<b>🎁 Акции и бонусы LOTTY TON</b>\n\n<b>1. Реферальная программа</b>\n— Приглашайте друзей по вашей реферальной ссылке (раздел 👥 Рефералы).\n— Получайте 15% от всех покупок билетов вашими рефералами.\n\n<b>2. Кэшбэк в выходные</b>\n— Каждую субботу и воскресенье вы получаете 3% кэшбэка на баланс с каждой покупки билетов.\n\n<b>3. Скидки на массовые покупки билетов</b>\n— 3 билета = 2.9 TON (экономия 0.1 TON)\n— 10 билетов = 9 TON (экономия 1 TON)\n\nСледите за новыми акциями и бонусами — они будут появляться здесь!",
-        "en": "<b>🎁 LOTTY TON Promotions and Bonuses</b>\n\n<b>1. Referral Program</b>\n— Invite friends using your referral link (see 👥 Referrals).\n— Get 15% of all ticket purchases made by your referrals.\n\n<b>2. Weekend Cashback</b>\n— Every Saturday and Sunday you receive 3% cashback on every ticket purchase.\n\n<b>3. Discounts for bulk ticket purchases</b>\n— 3 tickets = 2.9 TON (save 0.1 TON)\n— 10 tickets = 9 TON (save 1 TON)\n\nStay tuned for new promotions and bonuses — they will appear here!"
+        "ru": "<b>🎁 Акции и бонусы LOTTY TON</b>\n\n<b>1. Прогрессивная реферальная программа</b>\n"
+        "— Приглашайте друзей по вашей реферальной ссылке (раздел 👥 Рефералы).\n"
+        "— Получайте процент от всех покупок билетов вашими рефералами.\n"
+        "— Чем больше приглашённых, тем выше ваш процент!\n"
+        "— Уровни: 1-2 — 10%, 3-4 — 12%, 5-9 — 15%, 10-19 — 18%, 20-29 — 20%, 30-49 — 22%, 50+ — 25%.\n\n"
+        "<b>2. Кэшбэк в выходные</b>\n"
+        "— Каждую субботу и воскресенье (по UTC) вы получаете 3% кэшбэка на баланс с каждой покупки билетов.\n"
+        "— ⏰ Время UTC: суббота 00:00 - воскресенье 23:59\n\n"
+        "<b>3. Скидки на массовые покупки билетов</b>\n"
+        "— 3 билета = 2.9 TON (экономия 0.1 TON)\n"
+        "— 10 билетов = 9 TON (экономия 1 TON)\n\n"
+        "<b>4. Еженедельный розыгрыш «Второй шанс»</b>\n"
+        "— Каждое воскресенье в 18:00 UTC определяется случайный победитель среди участников.\n"
+        "— Приз: 25 TON\n"
+        "— Для участия достаточно купить хотя бы 1 билет в течение недели.\n"
+        "— ⏰ Время розыгрыша UTC: воскресенье 18:00\n\n"
+        "Следите за новыми акциями и бонусами — они будут появляться здесь!",
+        "en": "<b>🎁 LOTTY TON Promotions and Bonuses</b>\n\n<b>1. Progressive Referral Program</b>\n"
+        "— Invite friends using your referral link (see 👥 Referrals).\n"
+        "— Get a percentage of all ticket purchases made by your referrals.\n"
+        "— The more you invite, the higher your percentage!\n"
+        "— Levels: 1-2 — 10%, 3-4 — 12%, 5-9 — 15%, 10-19 — 18%, 20-29 — 20%, 30-49 — 22%, 50+ — 25%.\n\n"
+        "<b>2. Weekend Cashback</b>\n"
+        "— Every Saturday and Sunday (UTC time) you receive 3% cashback on every ticket purchase.\n"
+        "— ⏰ UTC time: Saturday 00:00 - Sunday 23:59\n\n"
+        "<b>3. Discounts for bulk ticket purchases</b>\n"
+        "— 3 tickets = 2.9 TON (save 0.1 TON)\n"
+        "— 10 tickets = 9 TON (save 1 TON)\n\n"
+        "<b>4. Weekly «Second Chance» Draw</b>\n"
+        "— Every Sunday at 18:00 UTC, a random winner is selected among participants.\n"
+        "— Prize: 25 TON\n"
+        "— To participate, just buy at least 1 ticket during the week.\n"
+        "— ⏰ Draw time UTC: Sunday 18:00\n\n"
+        "Stay tuned for new promotions and bonuses — they will appear here!"
     },
     "rules_page1": {
         "ru": "<b>📜 Правила игры LOTTY TON</b>\n\n<b>1. Общие положения</b>\n- LOTTY TON — это лотерейный бот, где вы можете покупать билеты, участвовать в розыгрышах и получать призы.\n\n<b>2. Баланс и пополнение</b>\n- Ваш баланс отображается в TON (Toncoin).\n- Пополнить баланс можно через <a href='https://t.me/CryptoBot'>CryptoBot</a> (📥 Пополнить).\n- CryptoBot — это надёжный платёжный сервис, рекомендованный Telegram для работы с криптовалютой.\n- Минимальная сумма пополнения — 1 TON.\n\n<b>3. Покупка билетов и розыгрыш</b>\n- Для участия в лотерее купите билеты (🎫 LOTTY TON).\n- Доступны пакеты: 1 билет (1 TON), 3 билета (2.9 TON), 10 билетов (9 TON).\n- После покупки билетов происходит розыгрыш: вы можете выиграть от 0.01 TON до 25 000 TON.\n- Результат розыгрыша и история операций отображаются в разделе «Баланс».",
@@ -219,12 +258,8 @@ translations = {
         "en": "Last active referrals (user_id):\n"
     },
     "referral_bonus_info": {
-        "ru": "\nВы получаете 15% от всех покупок ваших рефералов!",
-        "en": "\nYou receive 15% from all your referrals' ticket purchases!"
-    },
-    "test_deposit_success": {
-        "ru": "🧪 Тестовое пополнение успешно! На ваш баланс начислен 1 TON.",
-        "en": "🧪 Test deposit successful! 1 TON has been credited to your balance."
+        "ru": "\nВаш бонус зависит от количества приглашённых. Сейчас: {percent}%. Максимальный — 25%.",
+        "en": "\nYour bonus depends on the number of invited users. Now: {percent}%. Maximum — 25%."
     },
     "add10_success": {
         "ru": "✅ На ваш баланс начислено 10 TON!",
@@ -247,16 +282,12 @@ translations = {
         "en": "Bonus for referral's ticket purchase {ref_id}"
     },
     "history_deposit": {
-        "ru": "Пополнение через CryptoBot ({amount} TON)",
-        "en": "Deposit via CryptoBot ({amount} TON)"
+        "ru": "Пополнение {amount} TON",
+        "en": "Deposit {amount} TON"
     },
     "history_withdraw": {
-        "ru": "Вывод в CryptoBot ({amount} TON)",
-        "en": "Withdrawal to CryptoBot ({amount} TON)"
-    },
-    "history_test_deposit": {
-        "ru": "Тестовое пополнение (без реальных денег)",
-        "en": "Test deposit (no real money)"
+        "ru": "Вывод {amount} TON",
+        "en": "Withdrawal {amount} TON"
     },
     "history_cashback": {
         "ru": "Кэшбек 3% за покупку билетов (выходные)",
@@ -326,6 +357,62 @@ translations = {
         "ru": "🎉 В еженедельном розыгрыше «Второй шанс» победил пользователь с id {winner_id}!\nОн получает 10 TON. Поздравляем!\nУчаствуйте в лотерее на этой неделе — и, возможно, удача улыбнётся вам!",
         "en": "🎉 In the weekly 'Second Chance' draw, the winner is user with id {winner_id}!\nThey receive 10 TON. Congratulations!\nTake part in the lottery this week — maybe you'll be the next lucky one!"
     },
+    "pay": {
+        "ru": "💳 Оплатить",
+        "en": "💳 Pay"
+    },
+    "check_payment": {
+        "ru": "🔄 Проверить оплату",
+        "en": "🔄 Check payment"
+    },
+    "try_luck": {
+        "ru": "🎫 Испытать удачу",
+        "en": "🎫 Try your luck"
+    },
+    "deposit_min": {
+        "ru": "❌ Минимальная сумма для пополнения: 1 TON",
+        "en": "❌ Minimum deposit amount: 1 TON"
+    },
+    "cmd_start": {
+        "ru": "🎉 Запустить бота",
+        "en": "🎉 Start bot"
+    },
+    "cmd_help": {
+        "ru": "❓ Помощь",
+        "en": "❓ Help"
+    },
+    "cmd_balance": {
+        "ru": "💰 Баланс",
+        "en": "💰 Balance"
+    },
+    "cmd_deposit": {
+        "ru": "📥 Пополнить",
+        "en": "📥 Deposit"
+    },
+    "cmd_withdraw": {
+        "ru": "📤 Вывести",
+        "en": "📤 Withdraw"
+    },
+    "cmd_play": {
+        "ru": "🎫 Играть",
+        "en": "🎫 Play"
+    },
+    "cmd_rules": {
+        "ru": "📜 Правила",
+        "en": "📜 Rules"
+    },
+    "cmd_referral": {
+        "ru": "👥 Рефералы",
+        "en": "👥 Referrals"
+    },
+    "help_text": {
+        "ru": "🎯 <b>Доступные команды:</b>\n\n/start - Запустить бота и показать главное меню\n/help - Показать эту справку\n/balance - Показать баланс и историю операций\n/deposit - Пополнить баланс\n/withdraw - Вывести средства\n/play - Участвовать в лотерее\n/rules - Показать правила игры\n/referral - Реферальная программа\n\n💡 <b>Совет:</b> Используйте кнопки в меню для быстрого доступа к функциям!",
+        "en": "🎯 <b>Available commands:</b>\n\n/start - Start bot and show main menu\n/help - Show this help\n/balance - Show balance and transaction history\n/deposit - Deposit funds\n/withdraw - Withdraw funds\n/play - Participate in lottery\n/rules - Show game rules\n/referral - Referral program\n\n💡 <b>Tip:</b> Use menu buttons for quick access to functions!"
+    },
+    "history_lottery": {
+        "ru": "Лотерея: {tickets} билет(ов), выигрыш {win} TON",
+        "en": "Lottery: {tickets} ticket(s), win {win} TON"
+    },
 }
 
 def t(key, lang, **kwargs):
@@ -341,11 +428,11 @@ def main_menu(user_id=None, lang='ru'):
     # Остальные кнопки в два столбца
     builder.row(
         InlineKeyboardButton(text=t("balance", lang), callback_data="balance"),
-        InlineKeyboardButton(text=t("deposit", lang), callback_data="deposit")
+        InlineKeyboardButton(text=t("promo_btn", lang), callback_data="promo")
     )
     builder.row(
-        InlineKeyboardButton(text=t("withdraw", lang), callback_data="withdraw"),
-        InlineKeyboardButton(text=t("promo_btn", lang), callback_data="promo")
+        InlineKeyboardButton(text=t("deposit", lang), callback_data="deposit"),
+        InlineKeyboardButton(text=t("withdraw", lang), callback_data="withdraw")
     )
     builder.row(
         InlineKeyboardButton(text=t("rules_btn", lang), callback_data="rules"),
@@ -357,6 +444,7 @@ def main_menu(user_id=None, lang='ru'):
     )
     if user_id == ADMIN_ID:
         builder.row(InlineKeyboardButton(text="🧪 Тестовая рассылка Второй шанс", callback_data="second_chance_test"))
+        builder.row(InlineKeyboardButton(text="🎉 Рассылка о выигрыше", callback_data="attraction_winner_test"))
         builder.row(InlineKeyboardButton(text=t("add10", lang), callback_data="add10"))
     return builder.as_markup()
 
@@ -408,6 +496,23 @@ async def play_handler(callback: types.CallbackQuery):
     builder = InlineKeyboardBuilder()
     builder.add(InlineKeyboardButton(text=t("agree_button", user.lang), callback_data="agree_lottery"))
     builder.add(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main"))
+    if (getattr(callback.message, 'sticker', None) or 
+        getattr(callback.message, 'content_type', None) == 'sticker' or 
+        (callback.message.text and (
+            # Русские варианты
+            "✅ Баланс пополнен на" in callback.message.text or 
+            "✅ " in callback.message.text and "TON отправлены в ваш CryptoBot-кошелёк!" in callback.message.text or
+            "🎉 Вы приняли участие в лотерее" in callback.message.text or
+            # Английские варианты
+            "✅ Balance topped up by" in callback.message.text or
+            "✅ " in callback.message.text and "TON sent to your CryptoBot wallet!" in callback.message.text or
+            "🎉 You participated in the lottery" in callback.message.text
+        ))):
+        await callback.message.answer(
+            t("agree_lottery", user.lang),
+            reply_markup=builder.as_markup()
+        )
+        return
     await callback.message.edit_text(
         t("agree_lottery", user.lang),
         reply_markup=builder.as_markup()
@@ -422,6 +527,23 @@ async def agree_lottery_handler(callback: types.CallbackQuery):
     builder.row(InlineKeyboardButton(text=t("ticket_3", user.lang), callback_data="buy_3"))
     builder.row(InlineKeyboardButton(text=t("ticket_10", user.lang), callback_data="buy_10"))
     builder.row(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_play"))
+    if (getattr(callback.message, 'sticker', None) or 
+        getattr(callback.message, 'content_type', None) == 'sticker' or 
+        (callback.message.text and (
+            # Русские варианты
+            "✅ Баланс пополнен на" in callback.message.text or 
+            "✅ " in callback.message.text and "TON отправлены в ваш CryptoBot-кошелёк!" in callback.message.text or
+            "🎉 Вы приняли участие в лотерее" in callback.message.text or
+            # Английские варианты
+            "✅ Balance topped up by" in callback.message.text or
+            "✅ " in callback.message.text and "TON sent to your CryptoBot wallet!" in callback.message.text or
+            "🎉 You participated in the lottery" in callback.message.text
+        ))):
+        await callback.message.answer(
+            t("choose_tickets", user.lang),
+            reply_markup=builder.as_markup()
+        )
+        return
     await callback.message.edit_text(
         t("choose_tickets", user.lang),
         reply_markup=builder.as_markup()
@@ -431,39 +553,67 @@ async def agree_lottery_handler(callback: types.CallbackQuery):
 async def back_to_play_handler(callback: types.CallbackQuery):
     user = await db.get_user(callback.from_user.id)
     builder = InlineKeyboardBuilder()
-    builder.add(InlineKeyboardButton(text=t("agree_button", user.lang), callback_data="agree_lottery"))
-    builder.add(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main"))
+    builder.row(InlineKeyboardButton(text=t("ticket_1", user.lang), callback_data="buy_1"))
+    builder.row(InlineKeyboardButton(text=t("ticket_3", user.lang), callback_data="buy_3"))
+    builder.row(InlineKeyboardButton(text=t("ticket_10", user.lang), callback_data="buy_10"))
+    builder.row(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main"))
+    
+    # Если последнее сообщение было стикером или содержит сообщения о выигрыше, отправляем новое
+    if (getattr(callback.message, 'sticker', None) or 
+        getattr(callback.message, 'content_type', None) == 'sticker' or
+        (callback.message.text and (
+            # Русские варианты
+            "🎉 Вы приняли участие в лотерее" in callback.message.text or
+            # Английские варианты
+            "🎉 You participated in the lottery" in callback.message.text
+        ))):
+        await callback.message.answer(
+            t("choose_tickets", user.lang),
+            reply_markup=builder.as_markup()
+        )
+        return
+    
     await callback.message.edit_text(
-        t("agree_lottery", user.lang),
+        t("choose_tickets", user.lang),
         reply_markup=builder.as_markup()
     )
 
 @dp.callback_query(F.data == "back_to_main")
-async def back_to_main_handler(callback: types.CallbackQuery):
+async def back_to_main_handler(callback: types.CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
-    # Если сообщение содержит '❌ Оплата не найдена или произошла ошибка.', всегда отправляем новое сообщение
-    if callback.message.text and "❌ Оплата не найдена или произошла ошибка." in callback.message.text:
+    await state.clear()
+    
+    # Проверяем, содержит ли последнее сообщение стикер или финальные сообщения
+    if (getattr(callback.message, 'sticker', None) or 
+        getattr(callback.message, 'content_type', None) == 'sticker' or 
+        (callback.message.text and (
+            # Русские варианты
+            "✅ Баланс пополнен на" in callback.message.text or 
+            ("✅ " in callback.message.text and "TON отправлены в ваш CryptoBot-кошелёк!" in callback.message.text) or
+            "🎉 Вы приняли участие в лотерее" in callback.message.text or
+            # Английские варианты
+            "✅ Balance topped up by" in callback.message.text or
+            ("✅ " in callback.message.text and "TON sent to your CryptoBot wallet!" in callback.message.text) or
+            "🎉 You participated in the lottery" in callback.message.text
+        ))):
         await callback.message.answer(
-            "🎉 Добро пожаловать в лотерейный бот!\nЗдесь вы можете испытать удачу и выиграть призы!",
-            reply_markup=main_menu(callback.from_user.id, lang=user.lang)
+            t("start", user.lang, balance=user.balance, username=callback.from_user.username or callback.from_user.first_name or "Пользователь"),
+            reply_markup=main_menu(callback.from_user.id, lang=user.lang),
+            disable_web_page_preview=True
         )
         return
-    # Если сообщение без текста (например, после стикера или отдельного сообщения с результатом), всегда отправляем новое сообщение
-    if not callback.message.text:
-        await callback.message.answer(
-            "🎉 Добро пожаловать в лотерейный бот!\nЗдесь вы можете испытать удачу и выиграть призы!",
-            reply_markup=main_menu(callback.from_user.id, lang=user.lang)
-        )
-        return
+    
     try:
         await callback.message.edit_text(
-            "🎉 Добро пожаловать в лотерейный бот!\nЗдесь вы можете испытать удачу и выиграть призы!",
-            reply_markup=main_menu(callback.from_user.id, lang=user.lang)
+            t("start", user.lang, balance=user.balance, username=callback.from_user.username or callback.from_user.first_name or "Пользователь"),
+            reply_markup=main_menu(callback.from_user.id, lang=user.lang),
+            disable_web_page_preview=True
         )
-    except Exception:
+    except TelegramBadRequest:
         await callback.message.answer(
-            "🎉 Добро пожаловать в лотерейный бот!\nЗдесь вы можете испытать удачу и выиграть призы!",
-            reply_markup=main_menu(callback.from_user.id, lang=user.lang)
+            t("start", user.lang, balance=user.balance, username=callback.from_user.username or callback.from_user.first_name or "Пользователь"),
+            reply_markup=main_menu(callback.from_user.id, lang=user.lang),
+            disable_web_page_preview=True
         )
 
 # Покупка билетов и розыгрыш
@@ -494,15 +644,17 @@ async def buy_tickets_handler(callback: types.CallbackQuery):
     history = db.get_history(user)
     history.append({"type": "game", "tickets": tickets, "amount": -price})
     # Кэшбек за выходные
-    now = datetime.datetime.now()
+    now = datetime.now(timezone.utc)
     if now.weekday() in [5, 6]:  # 5 - суббота, 6 - воскресенье
         cashback = round(price * 0.03, 2)
         user.balance += cashback
         history.append({"type": "cashback", "amount": cashback})
-    # Реферальный бонус (15% от покупки)
+    # Реферальный бонус (прогрессивный процент)
     if getattr(user, "invited_by", None):
         ref_user = await db.get_user(user.invited_by)
-        bonus = round(price * getattr(ref_user, "ref_percent", 0.15), 2)
+        ref_count = len(db.get_referrals(ref_user))
+        ref_percent = get_ref_percent(ref_count)
+        bonus = round(price * ref_percent, 2)
         ref_user.balance += bonus
         ref_user.earned = getattr(ref_user, "earned", 0.0) + bonus
         ref_history = db.get_history(ref_user)
@@ -518,11 +670,11 @@ async def buy_tickets_handler(callback: types.CallbackQuery):
         db.set_history(user, history)
         await db.update_user(user)
         # Стикер победителя
-        await callback.message.answer_sticker("CAACAgIAAxkBAAEOhK9oKl600GvZPoV6OROtfhAJOr1glAACAwEAAladvQoC5dF4h-X6TzYE")
+        await callback.message.answer_sticker("CAACAgIAAxkBAAEOvPloVUPLwmRLS0gSrDAzbXBqSoqZRgAC9wADVp29CgtyJB1I9A0wNgQ")
         await callback.message.answer(
             t("win_result", user.lang, tickets=tickets, win_amount=win_amount, balance=user.balance),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=t("main_menu", user.lang), callback_data="lottery_back_to_main")
+                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_play")
             ]])
         )
     else:
@@ -531,7 +683,7 @@ async def buy_tickets_handler(callback: types.CallbackQuery):
         await callback.message.edit_text(
             t("lose_result", user.lang, tickets=tickets, win_amount=win_amount, balance=user.balance),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_play")
             ]])
         )
 
@@ -561,9 +713,6 @@ async def balance_handler(callback: types.CallbackQuery):
                 elif h.get("type") == "withdraw":
                     desc = t("history_withdraw", user.lang, amount=h.get("amount"))
                     amount = h.get("amount", "")
-                elif h.get("type") == "test_deposit":
-                    desc = t("history_test_deposit", user.lang)
-                    amount = h.get("amount", "")
                 elif h.get("type") == "cashback":
                     desc = t("history_cashback", user.lang)
                     amount = h.get("amount", "")
@@ -577,9 +726,28 @@ async def balance_handler(callback: types.CallbackQuery):
                 history_text += f"• {desc}\n"
     else:
         history_text += t("no_history", user.lang)
+    # Если последнее сообщение было стикером или содержит ключевые фразы, отправляем новое сообщение
+    if (getattr(callback.message, 'sticker', None) or 
+        getattr(callback.message, 'content_type', None) == 'sticker' or 
+        (callback.message.text and (
+            # Русские варианты
+            "✅ Баланс пополнен на" in callback.message.text or 
+            ("✅ " in callback.message.text and "TON отправлены в ваш CryptoBot-кошелёк!" in callback.message.text) or
+            "🎉 Вы приняли участие в лотерее" in callback.message.text or
+            # Английские варианты
+            "✅ Balance topped up by" in callback.message.text or
+            ("✅ " in callback.message.text and "TON sent to your CryptoBot wallet!" in callback.message.text) or
+            "🎉 You participated in the lottery" in callback.message.text
+        ))):
+        await callback.message.answer(
+            t("balance_text", user.lang, balance=user.balance) + history_text,
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+            ]])
+        )
+        return
     await callback.message.edit_text(
-        t("balance_text", user.lang, balance=user.balance) +
-        history_text,
+        t("balance_text", user.lang, balance=user.balance) + history_text,
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
         ]])
@@ -587,120 +755,59 @@ async def balance_handler(callback: types.CallbackQuery):
 
 # Раздел пополнения
 @dp.callback_query(F.data == "deposit")
-async def deposit_handler(callback: types.CallbackQuery):
+async def deposit_handler(callback: types.CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
-    builder = InlineKeyboardBuilder()
-    builder.add(InlineKeyboardButton(text="💳 1 TON", callback_data="deposit_1"))
-    builder.add(InlineKeyboardButton(text="💳 5 TON", callback_data="deposit_5"))
-    builder.add(InlineKeyboardButton(text="💳 10 TON", callback_data="deposit_10"))
-    # Кнопка тестового пополнения
-    builder.add(InlineKeyboardButton(text="🧪 Тестовое пополнение", callback_data="test_deposit"))
-    builder.row(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main"))
+    await state.set_state(UserStates.waiting_for_deposit_amount)
     await callback.message.edit_text(
         t("deposit_menu", user.lang),
-        reply_markup=builder.as_markup()
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+        ]])
     )
 
-@dp.callback_query(F.data.startswith("deposit_"))
-async def deposit_amount_handler(callback: types.CallbackQuery):
-    user = await db.get_user(callback.from_user.id)
-    amount = float(callback.data.split("_")[1])
-    user_id = callback.from_user.id
-
-    invoice = await cryptopay.create_invoice(
-        amount=amount,
-        description=f"Пополнение баланса для {user_id}",
-        payload=str(user_id)
-    )
-
-    if invoice.get("ok"):
-        pay_url = invoice["result"]["pay_url"]
-        builder = InlineKeyboardBuilder()
-        builder.add(InlineKeyboardButton(text="💳 Оплатить", url=pay_url))
-        builder.add(InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice['result']['invoice_id']}"))
-        builder.row(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_deposit"))
-
-        await callback.message.edit_text(
-            t("deposit_pay", user.lang, amount=amount),
-            reply_markup=builder.as_markup()
-        )
-    else:
-        await callback.message.edit_text(t("deposit_error", user.lang))
-
-@dp.callback_query(F.data == "back_to_deposit")
-async def back_to_deposit_handler(callback: types.CallbackQuery):
-    user = await db.get_user(callback.from_user.id)
-    builder = InlineKeyboardBuilder()
-    builder.add(InlineKeyboardButton(text="💳 1 TON", callback_data="deposit_1"))
-    builder.add(InlineKeyboardButton(text="💳 5 TON", callback_data="deposit_5"))
-    builder.add(InlineKeyboardButton(text="💳 10 TON", callback_data="deposit_10"))
-    builder.row(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main"))
-    if callback.message.text and t("check_payment_not_found", user.lang) in callback.message.text:
-        await callback.message.answer(
-            t("deposit_menu", user.lang),
-            reply_markup=builder.as_markup()
-        )
-    else:
-        await callback.message.edit_text(
-            t("deposit_menu", user.lang),
-            reply_markup=builder.as_markup()
-        )
-
-@dp.callback_query(F.data.startswith("check_"))
-async def check_payment_handler(callback: types.CallbackQuery):
-    user = await db.get_user(callback.from_user.id)
-    invoice_id = callback.data.split("_")[1]
-    invoice = await cryptopay.check_invoice(invoice_id)
-    menu_markup = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice_id}")],
-        [InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_deposit")]
+@dp.message(UserStates.waiting_for_deposit_amount, F.text.regexp(r"^\d+(\.\d+)?$"))
+async def process_deposit(message: types.Message, state: FSMContext):
+    amount = float(message.text)
+    user_id = message.from_user.id
+    user = await db.get_user(user_id)
+    menu_markup = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t("pay", user.lang), url="")],
+        [InlineKeyboardButton(text=t("check_payment", user.lang), callback_data="check_")],
+        [InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")]
     ])
 
-    if invoice.get("ok") and invoice.get("result"):
-        invoice_data = invoice["result"][0]
-        status = invoice_data.get("status")
-        if status == "paid":
-            user_id = int(invoice_data.get("payload", callback.from_user.id))
-            amount = float(invoice_data.get("amount", 0))
-            user = await db.get_user(user_id)
-            user.balance += amount
-            history = db.get_history(user)
-            history.append({"type": "deposit", "amount": amount, "desc": f"Пополнение через CryptoBot ({amount} TON)"})
-            db.set_history(user, history)
-            await db.update_user(user)
-            await callback.message.edit_text(
-                t("check_payment_paid", user.lang, amount=amount),
-                reply_markup=menu_markup
-            )
-        elif status == "active":
-            await callback.message.edit_text(
-                t("check_payment_active", user.lang),
-                reply_markup=menu_markup
-            )
+    if amount >= 1:
+        invoice = await cryptopay.create_invoice(amount=amount, description=f"Пополнение баланса для {user_id}")
+        if invoice and invoice.get("ok"):
+            result = invoice["result"]
+            pay_url = result["pay_url"]
+            invoice_id = result["invoice_id"]
+            menu_markup.inline_keyboard[0][0].url = pay_url
+            menu_markup.inline_keyboard[1][0].callback_data = f"check_{invoice_id}"
+            await message.answer(t("deposit_pay", user.lang, amount=amount), reply_markup=menu_markup)
+            await state.clear()
         else:
-            await callback.message.edit_text(
-                t("check_payment_status", user.lang, status=status),
-                reply_markup=menu_markup
-            )
+            await message.answer(t("deposit_error", user.lang), reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+            ]]))
+            await state.clear()
     else:
-        await callback.message.answer_sticker("CAACAgIAAxkBAAEOi95oMFEAAcgO-YbH4g76A2cfNt3zXzUAAgIBAAJWnb0KTuJsgctA5P82BA")
-        await callback.message.answer(
-            t("check_payment_not_found", user.lang),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice_id}")],
-                [InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_deposit")]
-            ])
-        )
+        await message.answer(t("deposit_min", user.lang), reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+        ]]))
+        await state.clear()
 
 # Раздел вывода
 @dp.callback_query(F.data == "withdraw")
-async def withdraw_handler(callback: types.CallbackQuery):
+async def withdraw_handler(callback: types.CallbackQuery, state: FSMContext):
     user = await db.get_user(callback.from_user.id)
+    await state.set_state(UserStates.waiting_for_withdraw_amount)
     menu_markup = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
     ]])
     if user.balance < 1:
         await callback.message.edit_text(t("withdraw_min", user.lang), reply_markup=menu_markup)
+        await state.clear()
         return
 
     await callback.message.edit_text(
@@ -708,8 +815,8 @@ async def withdraw_handler(callback: types.CallbackQuery):
         reply_markup=menu_markup
     )
 
-@dp.message(F.text.regexp(r"^\d+(\.\d+)?$"))
-async def process_withdrawal(message: types.Message):
+@dp.message(UserStates.waiting_for_withdraw_amount, F.text.regexp(r"^\d+(\.\d+)?$"))
+async def process_withdrawal(message: types.Message, state: FSMContext):
     amount = float(message.text)
     user_id = message.from_user.id
     user = await db.get_user(user_id)
@@ -724,11 +831,18 @@ async def process_withdrawal(message: types.Message):
             history.append({"type": "withdraw", "amount": amount, "desc": f"Вывод в CryptoBot ({amount} TON)"})
             db.set_history(user, history)
             await db.update_user(user)
+            # Отправляем стикер перед сообщением
+            sticker_message = await message.answer_sticker("CAACAgIAAxkBAAEOthVoUFVeKz06CYbsn5GfPido8X8ftAACAQEAAladvQoivp8OuMLmNDYE")
             await message.answer(t("withdraw_success", user.lang, amount=amount), reply_markup=menu_markup)
+            # Сохраняем ID стикера для возможного удаления
+            user.last_sticker_id = sticker_message.message_id
+            await db.update_user(user)
         else:
             await message.answer(t("withdraw_error", user.lang), reply_markup=menu_markup)
     else:
         await message.answer(t("withdraw_not_enough", user.lang), reply_markup=menu_markup)
+    
+    await state.clear()
 
 # Раздел акций
 @dp.callback_query(F.data == "promo")
@@ -736,7 +850,7 @@ async def promo_handler(callback: types.CallbackQuery):
     user = await db.get_user(callback.from_user.id)
     await callback.message.edit_text(
         t("promo_text", user.lang),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[ 
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
         ]])
     )
@@ -801,15 +915,66 @@ async def referral_handler(callback: types.CallbackQuery):
         total_purchases += getattr(ref_user, "ref_purchases", 0)
     lang = user.lang
     ref_link = f"https://t.me/{(await bot.get_me()).username}?start=ref_{user_id}"
+    ref_percent = int(get_ref_percent(total_referrals) * 100)
+    next_level, next_percent = get_next_ref_level(total_referrals)
+    max_percent = 25
+    # Таблица уровней
+    ref_table = (
+        "<b>Уровни реферальной программы:</b>\n"
+        "1-2 приглашённых — 10%\n"
+        "3-4 — 12%\n"
+        "5-9 — 15%\n"
+        "10-19 — 18%\n"
+        "20-29 — 20%\n"
+        "30-49 — 22%\n"
+        "50+ — 25%\n"
+        if lang == 'ru' else
+        "<b>Referral program levels:</b>\n"
+        "1-2 invited — 10%\n"
+        "3-4 — 12%\n"
+        "5-9 — 15%\n"
+        "10-19 — 18%\n"
+        "20-29 — 20%\n"
+        "30-49 — 22%\n"
+        "50+ — 25%\n"
+    )
+    # Прогресс-бар
+    bar_total = next_level if next_level else total_referrals
+    bar_filled = min(total_referrals, bar_total)
+    bar_length = 10
+    filled = int(bar_length * bar_filled / bar_total) if bar_total else bar_length
+    empty = bar_length - filled
+    bar = "[" + "■" * filled + "□" * empty + "]"
+    if next_level:
+        progress_text = (
+            f"\n<b>Ваш бонус:</b> {ref_percent}%  <b>({total_referrals} приглашённых)</b>\n"
+            f"{bar} {total_referrals}/{next_level} до {int(next_percent*100)}%\n"
+            f"Максимальный бонус: {max_percent}%"
+        ) if lang == 'ru' else (
+            f"\n<b>Your bonus:</b> {ref_percent}%  <b>({total_referrals} invited)</b>\n"
+            f"{bar} {total_referrals}/{next_level} to {int(next_percent*100)}%\n"
+            f"Maximum bonus: {max_percent}%"
+        )
+    else:
+        progress_text = (
+            f"\n<b>Ваш бонус:</b> {ref_percent}%  <b>({total_referrals} приглашённых)</b>\n"
+            f"{bar} {total_referrals}/{total_referrals}\n"
+            f"Вы достигли максимального бонуса!"
+        ) if lang == 'ru' else (
+            f"\n<b>Your bonus:</b> {ref_percent}%  <b>({total_referrals} invited)</b>\n"
+            f"{bar} {total_referrals}/{total_referrals}\n"
+            f"You have reached the maximum bonus!"
+        )
     text = t("referral_menu", lang, ref_link=ref_link, total_referrals=total_referrals, total_active=total_active, earned=earned, total_purchases=total_purchases)
+    text += ref_table + progress_text
     if last_active:
-        text += t("referral_last_active", lang)
+        text += "\n" + t("referral_last_active", lang)
         for rid in last_active:
             text += f"- {rid}\n"
-    text += t("referral_bonus_info", lang)
+    text += t("referral_bonus_info", lang, percent=ref_percent)
     await callback.message.edit_text(
         text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[ 
             InlineKeyboardButton(text=t("back", lang), callback_data="back_to_main")
         ]])
     )
@@ -837,22 +1002,6 @@ async def lottery_back_to_main_handler(callback: types.CallbackQuery):
         reply_markup=main_menu(callback.from_user.id, lang=user.lang)
     )
 
-# Обработчик тестового пополнения
-@dp.callback_query(F.data == "test_deposit")
-async def test_deposit_handler(callback: types.CallbackQuery):
-    user = await db.get_user(callback.from_user.id)
-    user.balance += 1  # Тестовое пополнение на 1 TON
-    history = db.get_history(user)
-    history.append({"type": "test_deposit", "amount": 1, "desc": "Тестовое пополнение (без реальных денег)"})
-    db.set_history(user, history)
-    await db.update_user(user)
-    await callback.message.edit_text(
-        t("test_deposit_success", user.lang),
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=t("main_menu", user.lang), callback_data="back_to_main")
-        ]])
-    )
-
 # Обработчик выбора языка
 @dp.callback_query(F.data == "change_lang")
 async def change_lang_handler(callback: types.CallbackQuery):
@@ -862,13 +1011,27 @@ async def change_lang_handler(callback: types.CallbackQuery):
         InlineKeyboardButton(text="Русский", callback_data="lang_ru"),
         InlineKeyboardButton(text="English", callback_data="lang_en")
     )
-    try:
-        await callback.message.edit_text(
+    if (getattr(callback.message, 'sticker', None) or 
+        getattr(callback.message, 'content_type', None) == 'sticker' or 
+        (callback.message.text and (
+            # Русские варианты
+            "✅ Баланс пополнен на" in callback.message.text or 
+            "✅ " in callback.message.text and "TON отправлены в ваш CryptoBot-кошелёк!" in callback.message.text or
+            "🎉 Вы приняли участие в лотерее" in callback.message.text or
+            # Английские варианты
+            "✅ Balance topped up by" in callback.message.text or
+            "✅ " in callback.message.text and "TON sent to your CryptoBot wallet!" in callback.message.text or
+            "🎉 You participated in the lottery" in callback.message.text
+        ))):
+        await callback.message.answer(
             t("choose_language", user.lang),
             reply_markup=builder.as_markup()
         )
-    except TelegramBadRequest:
-        await callback.answer(t("error_refresh", user.lang))
+        return
+    await callback.message.edit_text(
+        t("choose_language", user.lang),
+        reply_markup=builder.as_markup()
+    )
     await callback.answer()
 
 @dp.callback_query(F.data.in_(["lang_ru", "lang_en"]))
@@ -905,19 +1068,389 @@ async def second_chance_test_handler(callback: types.CallbackQuery):
     for user in users:
         lang = getattr(user, "lang", "ru")
         try:
+            # Кнопка "Испытать удачу" для перехода в главное меню
+            builder = InlineKeyboardBuilder()
+            builder.row(InlineKeyboardButton(text=t("try_luck", lang), callback_data="back_to_main"))
+            
             await bot.send_message(
                 user.user_id,
-                t("second_chance_winner", lang, winner_id=winner_id_masked)
+                t("second_chance_winner", lang, winner_id=winner_id_masked),
+                reply_markup=builder.as_markup()
             )
             count += 1
         except Exception as e:
-            print(f"[SecondChance] Не удалось отправить пользователю {user.user_id}: {e}")
-    await callback.answer(f"Рассылка завершена. Отправлено: {count}", show_alert=True)
+            continue
+    await callback.answer(f"Рассылка отправлена {count} пользователям", show_alert=True)
+
+# Обработчик рассылки о выигрыше для администратора
+@dp.callback_query(F.data == "attraction_winner_test")
+async def attraction_winner_test_handler(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Нет доступа", show_alert=True)
+        return
+    import random
+    fake_id = str(random.randint(100000000, 999999999))
+    winner_id_masked = fake_id[:-3] + "***"
+    win_amount = random.randint(50, 1500)
+    # Получаем всех пользователей
+    async with db.async_session() as session:
+        from sqlalchemy import select
+        result = await session.execute(select(User))
+        users = result.scalars().all()
+    count = 0
+    for user in users:
+        lang = getattr(user, "lang", "ru")
+        try:
+            # Кнопка "Испытать удачу" для перехода в главное меню
+            builder = InlineKeyboardBuilder()
+            builder.row(InlineKeyboardButton(text=t("try_luck", lang), callback_data="back_to_main"))
+            
+            # Текст рассылки о выигрыше
+            attraction_text = {
+                "ru": f"🎉 ПОЗДРАВЛЯЕМ ПОБЕДИТЕЛЯ!\n\nПользователь с ID {winner_id_masked} только что выиграл {win_amount} TON в лотерее LOTTY TON! 🎊\n\nЭто может быть и вы! Присоединяйтесь к игре и испытайте свою удачу! 🍀\n\nLOTTY TON — честная лотерея с мгновенными выплатами через CryptoBot!",
+                "en": f"🎉 CONGRATULATIONS TO THE WINNER!\n\nUser with ID {winner_id_masked} just won {win_amount} TON in the LOTTY TON lottery! 🎊\n\nThis could be you! Join the game and try your luck! 🍀\n\nLOTTY TON — fair lottery with instant payouts via CryptoBot!"
+            }
+            
+            await bot.send_message(
+                user.user_id,
+                attraction_text[lang],
+                reply_markup=builder.as_markup()
+            )
+            count += 1
+        except Exception as e:
+            continue
+    await callback.answer(f"Рассылка о выигрыше отправлена {count} пользователям", show_alert=True)
+
+# Обработчик проверки оплаты
+@dp.callback_query(F.data.startswith("check_"))
+async def check_payment_handler(callback: types.CallbackQuery):
+    user = await db.get_user(callback.from_user.id)
+    invoice_id = callback.data.split("_")[1]
+    invoice = await cryptopay.check_invoice(invoice_id)
+    menu_markup = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice_id}")],
+        [InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")]
+    ])
+
+    if invoice.get("ok") and invoice.get("result") and invoice["result"].get("items") and len(invoice["result"]["items"]) > 0:
+        invoice_data = invoice["result"]["items"][0]
+        status = invoice_data.get("status")
+        if status == "paid":
+            payload = invoice_data.get("payload")
+            if payload and payload != 'None':
+                try:
+                    user_id = int(payload)
+                except (ValueError, TypeError):
+                    user_id = callback.from_user.id
+            else:
+                user_id = callback.from_user.id
+            amount = float(invoice_data.get("amount", 0))
+            user = await db.get_user(user_id)
+            user.balance += amount
+            history = db.get_history(user)
+            history.append({"type": "deposit", "amount": amount, "desc": f"Пополнение через CryptoBot ({amount} TON)"})
+            db.set_history(user, history)
+            await db.update_user(user)
+            # Сначала отправляем стикер
+            await callback.message.answer_sticker("CAACAgIAAxkBAAEOvPloVUPLwmRLS0gSrDAzbXBqSoqZRgAC9wADVp29CgtyJB1I9A0wNgQ")
+            # Кнопка "‹ Назад"
+            menu_markup = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+            ]])
+            await callback.message.answer(
+                t("check_payment_paid", user.lang, amount=amount),
+                reply_markup=menu_markup
+            )
+            return
+        elif status == "active":
+            try:
+                await callback.message.edit_text(
+                    t("check_payment_active", user.lang),
+                    reply_markup=menu_markup
+                )
+            except TelegramBadRequest:
+                pass
+        else:
+            try:
+                await callback.message.edit_text(
+                    t("check_payment_status", user.lang, status=status),
+                    reply_markup=menu_markup
+                )
+            except TelegramBadRequest:
+                pass
+    else:
+        await callback.message.answer_sticker("CAACAgIAAxkBAAEOi95oMFEAAcgO-YbH4g76A2cfNt3zXzUAAgIBAAJWnb0KTuJsgctA5P82BA")
+        await callback.message.answer(
+            t("check_payment_not_found", user.lang),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Проверить оплату", callback_data=f"check_{invoice_id}")],
+                [InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")]
+            ])
+        )
 
 # Запуск бота
 async def main():
     await db.init()
+    
+    # Устанавливаем команды бота
+    await set_bot_commands()
+    
+    # Запускаем планировщик автоматической рассылки
+    asyncio.create_task(weekly_winner_scheduler())
+    
     await dp.start_polling(bot)
+
+async def set_bot_commands():
+    """Установка команд бота"""
+    commands = [
+        BotCommand(command="start", description="Запустить бота"),
+        BotCommand(command="play", description="Играть"),
+        BotCommand(command="rules", description="Правила"),
+        BotCommand(command="referral", description="Рефералы"),
+    ]
+    await bot.set_my_commands(commands)
+
+async def weekly_winner_scheduler():
+    """Планировщик для автоматической рассылки еженедельного выигрыша"""
+    while True:
+        now = datetime.now(timezone.utc)
+        
+        # Проверяем, воскресенье ли сегодня и 18:00 UTC
+        if now.weekday() == 6 and now.hour == 18 and now.minute == 0:
+            await send_weekly_winner_broadcast()
+            # Ждём 1 час, чтобы не отправлять повторно
+            await asyncio.sleep(3600)
+        else:
+            # Проверяем каждую минуту
+            await asyncio.sleep(60)
+
+async def send_weekly_winner_broadcast():
+    """Отправка автоматической рассылки о еженедельном выигрыше"""
+    try:
+        # Генерируем случайный ID победителя
+        fake_id = str(random.randint(100000000, 999999999))
+        winner_id_masked = fake_id[:-3] + "***"
+        
+        # Получаем всех пользователей
+        async with db.async_session() as session:
+            from sqlalchemy import select
+            result = await session.execute(select(User))
+            users = result.scalars().all()
+        
+        count = 0
+        for user in users:
+            lang = getattr(user, "lang", "ru")
+            try:
+                # Кнопка "Испытать удачу" для перехода в главное меню
+                builder = InlineKeyboardBuilder()
+                builder.row(InlineKeyboardButton(text=t("try_luck", lang), callback_data="back_to_main"))
+                
+                await bot.send_message(
+                    user.user_id,
+                    t("second_chance_winner", lang, winner_id=winner_id_masked),
+                    reply_markup=builder.as_markup()
+                )
+                count += 1
+            except Exception as e:
+                logger.error(f"Error sending weekly winner broadcast to user {user.user_id}: {e}")
+                continue
+        
+        logger.info(f"Weekly winner broadcast sent to {count} users")
+        
+    except Exception as e:
+        logger.error(f"Error in weekly winner broadcast: {e}")
+
+# Обработчики команд
+@dp.message(Command("help"))
+async def help_command(message: types.Message):
+    user = await db.get_user(message.from_user.id)
+    await message.answer(
+        t("help_text", user.lang),
+        reply_markup=main_menu(message.from_user.id, lang=user.lang)
+    )
+
+@dp.message(Command("balance"))
+async def balance_command(message: types.Message):
+    user = await db.get_user(message.from_user.id)
+    history = db.get_history(user)
+    history_text = t("history", user.lang)
+    if history:
+        for h in history[-5:]:  # Показываем последние 5 операций
+            if h.get("type") == "deposit":
+                desc = t("history_deposit", user.lang, amount=h.get("amount"))
+            elif h.get("type") == "withdraw":
+                desc = t("history_withdraw", user.lang, amount=h.get("amount"))
+            elif h.get("type") == "lottery":
+                desc = t("history_lottery", user.lang, tickets=h.get("tickets", 0), win=h.get("win", 0))
+            else:
+                desc = h.get("desc", "")
+            history_text += f"• {desc}\n"
+    else:
+        history_text += t("no_history", user.lang)
+    
+    await message.answer(
+        t("balance_text", user.lang, balance=user.balance) + history_text,
+        reply_markup=main_menu(message.from_user.id, lang=user.lang)
+    )
+
+@dp.message(Command("deposit"))
+async def deposit_command(message: types.Message, state: FSMContext):
+    user = await db.get_user(message.from_user.id)
+    await state.set_state(UserStates.waiting_for_deposit_amount)
+    await message.answer(
+        t("deposit_menu", user.lang),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+        ]])
+    )
+
+@dp.message(Command("withdraw"))
+async def withdraw_command(message: types.Message, state: FSMContext):
+    user = await db.get_user(message.from_user.id)
+    await state.set_state(UserStates.waiting_for_withdraw_amount)
+    menu_markup = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
+    ]])
+    if user.balance < 1:
+        await message.answer(t("withdraw_min", user.lang), reply_markup=menu_markup)
+        await state.clear()
+        return
+
+    await message.answer(
+        t("withdraw_menu", user.lang, balance=user.balance),
+        reply_markup=menu_markup
+    )
+
+@dp.message(Command("play"))
+async def play_command(message: types.Message):
+    user = await db.get_user(message.from_user.id)
+    builder = InlineKeyboardBuilder()
+    builder.add(InlineKeyboardButton(text=t("agree_button", user.lang), callback_data="agree_lottery"))
+    builder.add(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main"))
+    await message.answer(
+        t("agree_lottery", user.lang),
+        reply_markup=builder.as_markup()
+    )
+
+@dp.message(Command("rules"))
+async def rules_command(message: types.Message):
+    user = await db.get_user(message.from_user.id)
+    lang = user.lang
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text=t("next", lang), callback_data="rules_next"))
+    builder.row(InlineKeyboardButton(text=t("back", lang), callback_data="back_to_main"))
+    await message.answer(
+        t("rules_page1", lang),
+        reply_markup=builder.as_markup(),
+        disable_web_page_preview=True
+    )
+
+@dp.message(Command("referral"))
+async def referral_command(message: types.Message):
+    user_id = message.from_user.id
+    user = await db.get_user(user_id)
+    referrals = db.get_referrals(user)
+    total_referrals = len(referrals)
+    active_referrals = []
+    for rid in referrals:
+        ref_user = await db.get_user(rid)
+        if getattr(ref_user, "ref_purchases", 0) > 0:
+            active_referrals.append(rid)
+    total_active = len(active_referrals)
+    earned = round(getattr(user, "earned", 0.0), 2)
+    last_active = active_referrals[-3:]
+    total_purchases = 0
+    for rid in referrals:
+        ref_user = await db.get_user(rid)
+        total_purchases += getattr(ref_user, "ref_purchases", 0)
+    lang = user.lang
+    ref_link = f"https://t.me/{(await bot.get_me()).username}?start=ref_{user_id}"
+    ref_percent = int(get_ref_percent(total_referrals) * 100)
+    next_level, next_percent = get_next_ref_level(total_referrals)
+    max_percent = 25
+    # Таблица уровней
+    ref_table = (
+        "<b>Уровни реферальной программы:</b>\n"
+        "1-2 приглашённых — 10%\n"
+        "3-4 — 12%\n"
+        "5-9 — 15%\n"
+        "10-19 — 18%\n"
+        "20-29 — 20%\n"
+        "30-49 — 22%\n"
+        "50+ — 25%\n"
+        if lang == 'ru' else
+        "<b>Referral program levels:</b>\n"
+        "1-2 invited — 10%\n"
+        "3-4 — 12%\n"
+        "5-9 — 15%\n"
+        "10-19 — 18%\n"
+        "20-29 — 20%\n"
+        "30-49 — 22%\n"
+        "50+ — 25%\n"
+    )
+    # Прогресс-бар
+    bar_total = next_level if next_level else total_referrals
+    bar_filled = min(total_referrals, bar_total)
+    bar_length = 10
+    filled = int(bar_length * bar_filled / bar_total) if bar_total else bar_length
+    empty = bar_length - filled
+    bar = "[" + "■" * filled + "□" * empty + "]"
+    if next_level:
+        progress_text = (
+            f"\n<b>Ваш бонус:</b> {ref_percent}%  <b>({total_referrals} приглашённых)</b>\n"
+            f"{bar} {total_referrals}/{next_level} до {int(next_percent*100)}%\n"
+            f"Максимальный бонус: {max_percent}%"
+        ) if lang == 'ru' else (
+            f"\n<b>Your bonus:</b> {ref_percent}%  <b>({total_referrals} invited)</b>\n"
+            f"{bar} {total_referrals}/{next_level} to {int(next_percent*100)}%\n"
+            f"Maximum bonus: {max_percent}%"
+        )
+    else:
+        progress_text = (
+            f"\n<b>Ваш бонус:</b> {ref_percent}%  <b>({total_referrals} приглашённых)</b>\n"
+            f"{bar} {total_referrals}/{total_referrals}\n"
+            f"Вы достигли максимального бонуса!"
+        ) if lang == 'ru' else (
+            f"\n<b>Your bonus:</b> {ref_percent}%  <b>({total_referrals} invited)</b>\n"
+            f"{bar} {total_referrals}/{total_referrals}\n"
+            f"You have reached the maximum bonus!"
+        )
+    text = t("referral_menu", lang, ref_link=ref_link, total_referrals=total_referrals, total_active=total_active, earned=earned, total_purchases=total_purchases)
+    text += ref_table + progress_text
+    if last_active:
+        text += "\n" + t("referral_last_active", lang)
+        for rid in last_active:
+            text += f"- {rid}\n"
+    text += t("referral_bonus_info", lang, percent=ref_percent)
+    await message.answer(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[ 
+            InlineKeyboardButton(text=t("back", lang), callback_data="back_to_main")
+        ]])
+    )
+
+# Прогрессивная реферальная система
+REF_LEVELS = [
+    (1, 2, 0.10),
+    (3, 4, 0.12),
+    (5, 9, 0.15),
+    (10, 19, 0.18),
+    (20, 29, 0.20),
+    (30, 49, 0.22),
+    (50, 9999, 0.25),
+]
+
+def get_ref_percent(ref_count):
+    for min_n, max_n, percent in REF_LEVELS:
+        if min_n <= ref_count <= max_n:
+            return percent
+    return 0.10  # по умолчанию
+
+def get_next_ref_level(ref_count):
+    for min_n, max_n, percent in REF_LEVELS:
+        if ref_count < min_n:
+            return min_n, percent
+    return None, None
 
 if __name__ == '__main__':
     asyncio.run(main())

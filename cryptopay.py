@@ -56,7 +56,6 @@ class CryptoPay:
             "asset": currency,
             "amount": str(amount),
             "spend_id": str(uuid4()),
-            "comment": comment
         }
         try:
             timeout = aiohttp.ClientTimeout(total=10)
@@ -86,7 +85,7 @@ class CryptoPay:
                 ) as response:
                     data = await response.json()
                     logger.info(f"check_invoice response: {data}")
-                    if not data.get("ok") or not isinstance(data.get("result"), list) or not data["result"]:
+                    if not data.get("ok") or not isinstance(data.get("result"), dict) or not data["result"].get("items"):
                         return {"ok": False, "error": "Invoice not found"}
                     return data
         except Exception as e:

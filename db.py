@@ -5,6 +5,7 @@ from sqlalchemy import Column, Integer, Float, String, Text, update, BigInteger
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import select
 import json
+from sqlalchemy import text
 
 Base = declarative_base()
 
@@ -18,6 +19,7 @@ class User(Base):
     history = Column(Text, default='[]')  # JSON-строка
     invited_by = Column(BigInteger, nullable=True)  # user_id пригласившего
     lang = Column(String, default='ru')  # язык пользователя (ru/en)
+    last_sticker_id = Column(BigInteger, nullable=True)  # ID последнего стикера для удаления
 
 class AsyncDatabase:
     def __init__(self, dsn):
@@ -27,6 +29,13 @@ class AsyncDatabase:
     async def init(self):
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # Проверяем, есть ли столбец last_sticker_id, если нет - добавляем
+            try:
+                await conn.execute(text("SELECT last_sticker_id FROM users LIMIT 1"))
+            except:
+                # Столбца нет, добавляем его
+                await conn.execute(text("ALTER TABLE users ADD COLUMN last_sticker_id BIGINT"))
+                await conn.commit()
 
     async def get_user(self, user_id: int):
         print(f"[DEBUG] Ищу пользователя с user_id={user_id}")
