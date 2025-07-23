@@ -1,11 +1,14 @@
 import asyncio
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
-from sqlalchemy import Column, Integer, Float, String, Text, update, BigInteger
+from sqlalchemy import Column, Integer, Float, String, Text, update, BigInteger, Boolean, DateTime, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy import select
 import json
 from sqlalchemy import text
+import string
+import random
+from datetime import datetime, timedelta
 
 Base = declarative_base()
 
@@ -21,6 +24,21 @@ class User(Base):
     lang = Column(String, default='ru')  # язык пользователя (ru/en)
     last_sticker_id = Column(BigInteger, nullable=True)  # ID последнего стикера для удаления
 
+class Draw(Base):
+    __tablename__ = 'draws'
+    id = Column(Integer, primary_key=True)
+    code = Column(String(6), unique=True, index=True)  # Номер тиража
+    start_time = Column(DateTime, default=datetime.utcnow)
+    end_time = Column(DateTime)
+    is_active = Column(Boolean, default=True)
+
+class DrawEntry(Base):
+    __tablename__ = 'draw_entries'
+    id = Column(Integer, primary_key=True)
+    draw_id = Column(Integer, ForeignKey('draws.id'))
+    user_id = Column(BigInteger)
+    tickets = Column(Integer, default=1)
+
 class AsyncDatabase:
     def __init__(self, dsn):
         self.engine = create_async_engine(dsn, echo=False, future=True)
@@ -33,7 +51,6 @@ class AsyncDatabase:
             try:
                 await conn.execute(text("SELECT last_sticker_id FROM users LIMIT 1"))
             except:
-                # Столбца нет, добавляем его
                 await conn.execute(text("ALTER TABLE users ADD COLUMN last_sticker_id BIGINT"))
                 await conn.commit()
 
@@ -99,5 +116,69 @@ class AsyncDatabase:
                 update(User).where(User.user_id == user_id).values(lang=lang)
             )
             await session.commit()
+
+    async def get_active_draw(self):
+        async with self.async_session() as session:
+            now = datetime.utcnow()
+            result = await session.execute(
+                select(Draw).where(Draw.is_active == True, Draw.end_time > now)
+            )
+            draw = result.scalar_one_or_none()
+            return draw
+
+    async def create_new_draw(self, duration_minutes=10):
+        async with self.async_session() as session:
+            code = self._generate_draw_code()
+            now = datetime.utcnow()
+            end_time = now + timedelta(minutes=duration_minutes)
+            draw = Draw(code=code, start_time=now, end_time=end_time, is_active=True)
+            session.add(draw)
+            await session.commit()
+            await session.refresh(draw)
+            return draw
+
+    def _generate_draw_code(self):
+        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+    async def add_entry(self, draw_id, user_id, tickets=1):
+        async with self.async_session() as session:
+            entry = await session.execute(
+                select(DrawEntry).where(DrawEntry.draw_id == draw_id, DrawEntry.user_id == user_id)
+            )
+            entry = entry.scalar_one_or_none()
+            if entry:
+                entry.tickets += tickets
+            else:
+                entry = DrawEntry(draw_id=draw_id, user_id=user_id, tickets=tickets)
+                session.add(entry)
+            await session.commit()
+
+    async def finish_draw(self, draw: Draw):
+        async with self.async_session() as session:
+            draw.is_active = False
+            await session.merge(draw)
+            await session.commit()
+
+    async def get_draw_entries(self, draw_id):
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(DrawEntry).where(DrawEntry.draw_id == draw_id)
+            )
+            return result.scalars().all()
+
+    async def get_draw_by_code(self, code):
+        async with self.async_session() as session:
+            result = await session.execute(
+                select(Draw).where(Draw.code == code)
+            )
+            return result.scalar_one_or_none()
+
+    async def get_finished_draws(self):
+        async with self.async_session() as session:
+            now = datetime.utcnow()
+            result = await session.execute(
+                select(Draw).where(Draw.is_active == True, Draw.end_time <= now)
+            )
+            return result.scalars().all()
 
 # Пример DSN: 'postgresql+asyncpg://user:password@localhost:5432/localhost' 

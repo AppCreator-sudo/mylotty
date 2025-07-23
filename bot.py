@@ -4,7 +4,6 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from uuid import uuid4
@@ -16,6 +15,7 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime, timedelta, timezone
 from aiogram.exceptions import TelegramBadRequest
+import string
 
 load_dotenv()
 db = AsyncDatabase(os.getenv("DATABASE_URL"))
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 API_TOKEN = os.getenv('API_TOKEN')
 CRYPTOPAY_TOKEN = os.getenv('CRYPTOPAY_TOKEN')
 
-bot = Bot(token=API_TOKEN, default=DefaultBotProperties(parse_mode='HTML'))
+bot = Bot(token=API_TOKEN, parse_mode='HTML')
 dp = Dispatcher()
 
 # Инициализация CryptoPay
@@ -550,14 +550,14 @@ async def agree_lottery_handler(callback: types.CallbackQuery):
     )
 
 @dp.callback_query(F.data == "back_to_play")
-async def back_to_play_handler(callback: types.CallbackQuery):
+async def back_to_play_handler(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
     user = await db.get_user(callback.from_user.id)
     builder = InlineKeyboardBuilder()
     builder.row(InlineKeyboardButton(text=t("ticket_1", user.lang), callback_data="buy_1"))
     builder.row(InlineKeyboardButton(text=t("ticket_3", user.lang), callback_data="buy_3"))
     builder.row(InlineKeyboardButton(text=t("ticket_10", user.lang), callback_data="buy_10"))
     builder.row(InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main"))
-    
     # Если последнее сообщение было стикером или содержит сообщения о выигрыше, отправляем новое
     if (getattr(callback.message, 'sticker', None) or 
         getattr(callback.message, 'content_type', None) == 'sticker' or
@@ -572,7 +572,6 @@ async def back_to_play_handler(callback: types.CallbackQuery):
             reply_markup=builder.as_markup()
         )
         return
-    
     await callback.message.edit_text(
         t("choose_tickets", user.lang),
         reply_markup=builder.as_markup()
@@ -580,9 +579,8 @@ async def back_to_play_handler(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "back_to_main")
 async def back_to_main_handler(callback: types.CallbackQuery, state: FSMContext):
-    user = await db.get_user(callback.from_user.id)
     await state.clear()
-    
+    user = await db.get_user(callback.from_user.id)
     # Проверяем, содержит ли последнее сообщение стикер или финальные сообщения
     if (getattr(callback.message, 'sticker', None) or 
         getattr(callback.message, 'content_type', None) == 'sticker' or 
@@ -602,7 +600,6 @@ async def back_to_main_handler(callback: types.CallbackQuery, state: FSMContext)
             disable_web_page_preview=True
         )
         return
-    
     try:
         await callback.message.edit_text(
             t("start", user.lang, balance=user.balance, username=callback.from_user.username or callback.from_user.first_name or "Пользователь"),
@@ -637,55 +634,26 @@ async def buy_tickets_handler(callback: types.CallbackQuery):
         return
     # Списываем средства
     user.balance -= price
-    # Учёт покупок для рефералов
     user.ref_purchases = getattr(user, "ref_purchases", 0) + 1
     await db.update_user(user)
     # История операций
     history = db.get_history(user)
     history.append({"type": "game", "tickets": tickets, "amount": -price})
-    # Кэшбек за выходные
-    now = datetime.now(timezone.utc)
-    if now.weekday() in [5, 6]:  # 5 - суббота, 6 - воскресенье
-        cashback = round(price * 0.03, 2)
-        user.balance += cashback
-        history.append({"type": "cashback", "amount": cashback})
-    # Реферальный бонус (прогрессивный процент)
-    if getattr(user, "invited_by", None):
-        ref_user = await db.get_user(user.invited_by)
-        ref_count = len(db.get_referrals(ref_user))
-        ref_percent = get_ref_percent(ref_count)
-        bonus = round(price * ref_percent, 2)
-        ref_user.balance += bonus
-        ref_user.earned = getattr(ref_user, "earned", 0.0) + bonus
-        ref_history = db.get_history(ref_user)
-        ref_history.append({"type": "referral_bonus", "ref_id": user.user_id, "amount": bonus})
-        db.set_history(ref_user, ref_history)
-        await db.update_user(ref_user)
-    # Выигрыш: случайно от 10% до 50% от суммы покупки
-    win_percent = random.uniform(0.1, 0.5)
-    win_amount = round(price * win_percent, 2)
-    if win_amount > 0:
-        user.balance += win_amount
-        history.append({"type": "win", "amount": win_amount})
-        db.set_history(user, history)
-        await db.update_user(user)
-        # Стикер победителя
-        await callback.message.answer_sticker("CAACAgIAAxkBAAEOvPloVUPLwmRLS0gSrDAzbXBqSoqZRgAC9wADVp29CgtyJB1I9A0wNgQ")
-        await callback.message.answer(
-            t("win_result", user.lang, tickets=tickets, win_amount=win_amount, balance=user.balance),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_play")
-            ]])
-        )
-    else:
-        db.set_history(user, history)
-        await db.update_user(user)
-        await callback.message.edit_text(
-            t("lose_result", user.lang, tickets=tickets, win_amount=win_amount, balance=user.balance),
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_play")
-            ]])
-        )
+    db.set_history(user, history)
+    await db.update_user(user)
+    # --- Привязываем к тиражу ---
+    draw = await db.get_active_draw()
+    if not draw:
+        draw = await db.create_new_draw(duration_minutes=1)
+    await db.add_entry(draw.id, user_id, tickets)
+    print(f"[DEBUG] add_entry: draw_id={draw.id}, user_id={user_id}, tickets={tickets}")
+    # --- Информируем пользователя о номере тиража ---
+    await callback.message.edit_text(
+        f"Вы купили {tickets} билет(ов) в тираже {draw.code}! Итоги через {int((draw.end_time - datetime.utcnow()).total_seconds() // 60)} минут. Удачи!",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_play")
+        ]])
+    )
 
 # Раздел баланса с историей
 @dp.callback_query(F.data == "balance")
@@ -702,20 +670,20 @@ async def balance_handler(callback: types.CallbackQuery):
                     desc = t("history_game", user.lang, tickets=h.get("tickets"))
                     amount = h.get("amount", "")
                 elif h.get("type") == "win":
-                    desc = t("history_win", user.lang, amount=h.get("amount"))
-                    amount = h.get("amount", "")
+                    desc = t("history_win", user.lang, amount=f'{float(h.get("amount", 0)):.2f}')
+                    amount = f'{float(h.get("amount", 0)):.2f}'
                 elif h.get("type") == "referral_bonus":
                     desc = t("history_referral_bonus", user.lang, ref_id=h.get("ref_id"))
                     amount = h.get("amount", "")
                 elif h.get("type") == "deposit":
-                    desc = t("history_deposit", user.lang, amount=h.get("amount"))
-                    amount = h.get("amount", "")
+                    desc = t("history_deposit", user.lang, amount=f'{float(h.get("amount", 0)):.2f}')
+                    amount = f'{float(h.get("amount", 0)):.2f}'
                 elif h.get("type") == "withdraw":
-                    desc = t("history_withdraw", user.lang, amount=h.get("amount"))
-                    amount = h.get("amount", "")
+                    desc = t("history_withdraw", user.lang, amount=f'{float(h.get("amount", 0)):.2f}')
+                    amount = f'{float(h.get("amount", 0)):.2f}'
                 elif h.get("type") == "cashback":
                     desc = t("history_cashback", user.lang)
-                    amount = h.get("amount", "")
+                    amount = f'{float(h.get("amount", 0)):.2f}'
                 else:
                     desc = str(h)
             else:
@@ -741,14 +709,14 @@ async def balance_handler(callback: types.CallbackQuery):
         ))):
         await callback.message.answer(
             t("balance_text", user.lang, balance=user.balance) + history_text,
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[\
                 InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
             ]])
         )
         return
     await callback.message.edit_text(
         t("balance_text", user.lang, balance=user.balance) + history_text,
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[\
             InlineKeyboardButton(text=t("back", user.lang), callback_data="back_to_main")
         ]])
     )
@@ -1198,6 +1166,9 @@ async def main():
     # Запускаем планировщик автоматической рассылки
     asyncio.create_task(weekly_winner_scheduler())
     
+    # --- ДОБАВЛЯЕМ ФОНОВУЮ ЗАДАЧУ ДЛЯ ТИРАЖЕЙ ---
+    asyncio.create_task(draw_scheduler())
+    
     await dp.start_polling(bot)
 
 async def set_bot_commands():
@@ -1451,6 +1422,70 @@ def get_next_ref_level(ref_count):
         if ref_count < min_n:
             return min_n, percent
     return None, None
+
+# --- ДОБАВЛЯЕМ ФОНОВУЮ ЗАДАЧУ ДЛЯ ТИРАЖЕЙ ---
+async def draw_scheduler():
+    print("[DEBUG] draw_scheduler started")
+    while True:
+        # Завершаем все завершённые тиражи
+        finished_draws = await db.get_finished_draws()
+        for draw in finished_draws:
+            print(f"[DEBUG] finishing expired draw: {draw.code}")
+            await finish_and_notify_draw(draw)
+        # Проверяем, есть ли активный тираж
+        draw = await db.get_active_draw()
+        now = datetime.utcnow()
+        print(f"[DEBUG] draw: {draw}, now: {now}")
+        if not draw:
+            print(f"[DEBUG] draw is None or ended. draw={draw}")
+            new_draw = await db.create_new_draw(duration_minutes=1)
+            print(f"[DEBUG] new draw created: {new_draw.code}")
+        await asyncio.sleep(2)
+
+async def finish_and_notify_draw(draw):
+    print(f"[DEBUG] finish_and_notify_draw for draw {draw.code}")
+    entries = await db.get_draw_entries(draw.id)
+    print(f"[DEBUG] entries: {entries}")
+    if not entries:
+        await db.finish_draw(draw)
+        print(f"[DEBUG] draw {draw.code} finished (no entries)")
+        return
+    notified = set()
+    for entry in entries:
+        user = await db.get_user(entry.user_id)
+        total_win = 0
+        for _ in range(entry.tickets):
+            win_percent = random.uniform(0.1, 0.5)
+            win_amount = round(1.0 * win_percent, 2)
+            total_win += win_amount
+        if total_win > 0:
+            user.balance += total_win
+            history = db.get_history(user)
+            history.append({"type": "win", "amount": total_win, "draw_code": draw.code})
+            db.set_history(user, history)
+            await db.update_user(user)
+        try:
+            # Сначала отправляем стикер (утёнок)
+            await bot.send_sticker(entry.user_id, "CAACAgIAAxkBAAEOvPloVUPLwmRLS0gSrDAzbXBqSoqZRgAC9wADVp29CgtyJB1I9A0wNgQ")
+            # Затем сообщение о выигрыше с локализацией
+            lang = getattr(user, 'lang', 'ru')
+            await bot.send_message(
+                entry.user_id,
+                WIN_MSG[lang].format(code=draw.code, amount=total_win)
+            )
+            print(f"[DEBUG] sent result to user {entry.user_id}")
+            notified.add(entry.user_id)
+        except Exception as e:
+            print(f"[DEBUG] error sending to user {entry.user_id}: {e}")
+            continue
+    await db.finish_draw(draw)
+    print(f"[DEBUG] draw {draw.code} finished (notified)")
+
+# Добавляю локализацию для сообщения о выигрыше
+WIN_MSG = {
+    'ru': "Тираж {code} завершён! Ваш выигрыш: {amount:.2f} TON. Спасибо за участие!\n\nНажмите /start для продолжения.",
+    'en': "Draw {code} finished! Your prize: {amount:.2f} TON. Thank you for participating!\n\nPress /start to continue."
+}
 
 if __name__ == '__main__':
     asyncio.run(main())
